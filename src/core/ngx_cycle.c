@@ -672,7 +672,7 @@ ngx_init_cycle(ngx_cycle_t *old_cycle)
 
     pool->log = cycle->log;
 
-    //调用init_module对所有的模块进行初始化，调用所有模块的ngx_XXX_module_init钩子，比如ngx_event_module_init
+    //调用init_module对所有的模块进行初始化，调用所有模块的 ngx_XXX_module_init 钩子，比如 ngx_event_module_init
     if (ngx_init_modules(cycle) != NGX_OK) {
         /* fatal */
         exit(1);
@@ -1053,6 +1053,10 @@ ngx_delete_pidfile(ngx_cycle_t *cycle)
 }
 
 
+//读取ngx_core_module模块的配置结构ngx_core_conf_t；
+//根据配置结构找到其工作进程文件，如"/usr/local/nginx/logs/nginx.pid"(该文件保存nginx进程ID，即pid)；
+//打开该文件，读取pid；
+//调用ngx_os_signal_process()发送信号；
 ngx_int_t
 ngx_signal_process(ngx_cycle_t *cycle, char *sig)
 {

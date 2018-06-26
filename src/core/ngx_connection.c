@@ -128,6 +128,15 @@ ngx_clone_listening(ngx_conf_t *cf, ngx_listening_t *ls)
 }
 
 
+//对全局变量ngx_cycle的listening数组，逐一设置该数组每个元素的以下字段
+//ls[i].sockaddr (调用getsockname())
+//ls[i].addr_text_max_len
+//ls[i].addr_text
+//ls[i].backlog
+//ls[i].rcvbuf (调用getsockopt())
+//ls[i].sndbuf (调用getsockopt())
+//ls[i].accept_filter
+//ls[i].deferred_accept
 ngx_int_t
 ngx_set_inherited_sockets(ngx_cycle_t *cycle)
 {
@@ -381,6 +390,7 @@ ngx_set_inherited_sockets(ngx_cycle_t *cycle)
 }
 
 
+//listen socket的初始化,创建并bind等操作， 打开所有的监听套接口（依次进行socket,bind,listen）
 ngx_int_t
 ngx_open_listening_sockets(ngx_cycle_t *cycle)
 {

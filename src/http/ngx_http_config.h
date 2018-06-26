@@ -22,11 +22,11 @@ typedef struct {
 
 
 typedef struct {
-    ngx_int_t   (*preconfiguration)(ngx_conf_t *cf);
+    ngx_int_t   (*preconfiguration)(ngx_conf_t *cf);    //添加变量定义
     ngx_int_t   (*postconfiguration)(ngx_conf_t *cf);
 
-    void       *(*create_main_conf)(ngx_conf_t *cf);
-    char       *(*init_main_conf)(ngx_conf_t *cf, void *conf);
+    void       *(*create_main_conf)(ngx_conf_t *cf);            //创建每个模块的main_conf
+    char       *(*init_main_conf)(ngx_conf_t *cf, void *conf);  //初始化main配置
 
     void       *(*create_srv_conf)(ngx_conf_t *cf);
     char       *(*merge_srv_conf)(ngx_conf_t *cf, void *prev, void *conf);
@@ -38,9 +38,9 @@ typedef struct {
 
 #define NGX_HTTP_MODULE           0x50545448   /* "HTTP" */
 
-#define NGX_HTTP_MAIN_CONF        0x02000000
-#define NGX_HTTP_SRV_CONF         0x04000000
-#define NGX_HTTP_LOC_CONF         0x08000000
+#define NGX_HTTP_MAIN_CONF        0x02000000    //可以直接出现在http配置指令里。
+#define NGX_HTTP_SRV_CONF         0x04000000    //可以直接出现在server配置指令里。
+#define NGX_HTTP_LOC_CONF         0x08000000    //可以直接出现在location配置指令里。
 #define NGX_HTTP_UPS_CONF         0x10000000
 #define NGX_HTTP_SIF_CONF         0x20000000
 #define NGX_HTTP_LIF_CONF         0x40000000

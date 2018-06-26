@@ -157,7 +157,7 @@ ngx_http_block(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
 
     // http处理的配置结构体，里面有main_conf/srv_conf/loc_conf三个数组
     // 对应ngx_conf_file.c 中 ngx_conf_handler 方法的 NGX_MAIN_CONF 级别配置
-    // 不允许重复配置 ： 验证数据是否赋值？
+    // 不允许重复配置 ： 验证数据是
     if (*(ngx_http_conf_ctx_t **) conf) {
         return "is duplicate";
     }
@@ -249,7 +249,7 @@ ngx_http_block(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
     // 暂存当前的解析上下文
     // cf是函数入口传递来的上下文
     pcf = *cf;
-    // 设置事件模块的新解析上下文
+    // 设置事件模块的新解析上下文, 临时调整上下文，下面还会还原
     // 即ngx_http_conf_ctx_t结构体
     cf->ctx = ctx;
 
@@ -502,6 +502,7 @@ ngx_http_init_headers_in_hash(ngx_conf_t *cf, ngx_http_core_main_conf_t *cmcf)
 }
 
 
+//初始化ngx_http_core_main_conf_t->phase_engine
 static ngx_int_t
 ngx_http_init_phase_handlers(ngx_conf_t *cf, ngx_http_core_main_conf_t *cmcf)
 {
@@ -610,7 +611,12 @@ ngx_http_init_phase_handlers(ngx_conf_t *cf, ngx_http_core_main_conf_t *cmcf)
     return NGX_OK;
 }
 
-
+//合并当前模块下，所有server的配置信息
+//解析完成后会把各个配置项存放到各个模块的上下文结构中。但此时还没有对http模块、server模块、location模块公共部分进行合并处理。所谓的合并： server块的模块上下文没有值，则继承http模块的模块上下文值。location块的模块上下文没有值，则继承server块模块上下文的值。接下来分析nginx是如何合并http模块、server模块、location模块公共部分。
+//比如：connection_pool_size 可以设置在 http/server/location层
+//比如：root 可以设置在 http/server/location层
+//1 server块的合并      如果server块中的上下文没有值，则使用http上下文的值
+//2 location块的合并    如果location块中的上下文没有值，则使用http上下文中的值
 static char *
 ngx_http_merge_servers(ngx_conf_t *cf, ngx_http_core_main_conf_t *cmcf,
     ngx_http_module_t *module, ngx_uint_t ctx_index)
@@ -622,14 +628,14 @@ ngx_http_merge_servers(ngx_conf_t *cf, ngx_http_core_main_conf_t *cmcf,
     ngx_http_core_srv_conf_t   **cscfp;
 
     cscfp = cmcf->servers.elts;
-    ctx = (ngx_http_conf_ctx_t *) cf->ctx;
+    ctx = (ngx_http_conf_ctx_t *) cf->ctx;  //ngx_http_block中构建的 srv_conf 及 main_conf
     saved = *ctx;
     rv = NGX_CONF_OK;
 
     for (s = 0; s < cmcf->servers.nelts; s++) {
 
         /* merge the server{}s' srv_conf's */
-
+        //合并 server 级别 srv_conf
         ctx->srv_conf = cscfp[s]->ctx->srv_conf;
 
         if (module->merge_srv_conf) {
@@ -643,7 +649,7 @@ ngx_http_merge_servers(ngx_conf_t *cf, ngx_http_core_main_conf_t *cmcf,
         if (module->merge_loc_conf) {
 
             /* merge the server{}'s loc_conf */
-
+            //合并 server 级别 loc_conf
             ctx->loc_conf = cscfp[s]->ctx->loc_conf;
 
             rv = module->merge_loc_conf(cf, saved.loc_conf[ctx_index],
@@ -653,7 +659,7 @@ ngx_http_merge_servers(ngx_conf_t *cf, ngx_http_core_main_conf_t *cmcf,
             }
 
             /* merge the locations{}' loc_conf's */
-
+            //合并 locations 级别 loc_conf
             clcf = cscfp[s]->ctx->loc_conf[ngx_http_core_module.ctx_index];
 
             rv = ngx_http_merge_locations(cf, clcf->locations,
@@ -893,6 +899,9 @@ ngx_http_init_static_location_trees(ngx_conf_t *cf,
 }
 
 
+// 把本location{}的配置信息加入到上一级的配置里
+// pclcf->locations是一个queue
+// in ngx_http.c
 ngx_int_t
 ngx_http_add_location(ngx_conf_t *cf, ngx_queue_t **locations,
     ngx_http_core_loc_conf_t *clcf)
@@ -1425,6 +1434,7 @@ ngx_http_add_server(ngx_conf_t *cf, ngx_http_core_srv_conf_t *cscf,
 }
 
 
+//主要功能就是创建listening结构，然后初始化。
 static ngx_int_t
 ngx_http_optimize_servers(ngx_conf_t *cf, ngx_http_core_main_conf_t *cmcf,
     ngx_array_t *ports)
@@ -1712,6 +1722,7 @@ ngx_http_init_listening(ngx_conf_t *cf, ngx_http_conf_port_t *port)
 
         // 调用ngx_create_listening添加到cycle的监听端口数组，只是添加，没有其他动作
         // 设置有连接发生时的回调函数ngx_http_init_connection
+        // 注意这个handler并不是accept handler
         ls = ngx_http_add_listening(cf, &addr[i]);
         if (ls == NULL) {
             return NGX_ERROR;
@@ -1730,12 +1741,14 @@ ngx_http_init_listening(ngx_conf_t *cf, ngx_http_conf_port_t *port)
 
 #if (NGX_HAVE_INET6)
         case AF_INET6:
+            //初始化虚拟主机相关的地址，设置hash等等.
             if (ngx_http_add_addrs6(cf, hport, addr) != NGX_OK) {
                 return NGX_ERROR;
             }
             break;
 #endif
         default: /* AF_INET */
+            //初始化虚拟主机相关的地址，设置hash等等.
             if (ngx_http_add_addrs(cf, hport, addr) != NGX_OK) {
                 return NGX_ERROR;
             }

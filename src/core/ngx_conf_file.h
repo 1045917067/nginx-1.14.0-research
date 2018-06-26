@@ -19,8 +19,8 @@
  *    TT        command type, i.e. HTTP "location" or "server" command
  */
 
-#define NGX_CONF_NOARGS      0x00000001
-#define NGX_CONF_TAKE1       0x00000002
+#define NGX_CONF_NOARGS      0x00000001 //配置指令不接受任何参数
+#define NGX_CONF_TAKE1       0x00000002 //配置指令接受1个参数
 #define NGX_CONF_TAKE2       0x00000004
 #define NGX_CONF_TAKE3       0x00000008
 #define NGX_CONF_TAKE4       0x00000010
@@ -41,7 +41,7 @@
 
 #define NGX_CONF_ARGS_NUMBER 0x000000ff
 #define NGX_CONF_BLOCK       0x00000100     //配置指令可以接受一个配置块，如server
-#define NGX_CONF_FLAG        0x00000200
+#define NGX_CONF_FLAG        0x00000200     //配置指令可以接受的值是”on”或者”off”，最终会被转成bool值。
 #define NGX_CONF_ANY         0x00000400
 #define NGX_CONF_1MORE       0x00000800
 #define NGX_CONF_2MORE       0x00001000
