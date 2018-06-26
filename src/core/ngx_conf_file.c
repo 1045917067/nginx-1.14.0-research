@@ -489,7 +489,7 @@ ngx_conf_handler(ngx_conf_t *cf, ngx_int_t last)
                 conf = ((void **) cf->ctx)[cf->cycle->modules[i]->index];
 
             // NGX_MAIN_CONF，里面存储一个void**指针
-            // 例如核心模块http、stream
+            // 例如核心模块 http、stream
             // 因为之前ctx在这个位置没有指向结构体的指针，所以把ctx位置的指针赋值给conf，让后面的set函数，为这个位置赋值配置项结构体的首地址。
             } else if (cmd->type & NGX_MAIN_CONF) {
                 conf = &(((void **) cf->ctx)[cf->cycle->modules[i]->index]);

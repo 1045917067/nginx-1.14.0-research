@@ -978,6 +978,7 @@ ngx_event_process_init(ngx_cycle_t *cycle)
         使用了accept_mutex，暂时不将监听套接字放入epoll中
         而是等到worker抢到accept互斥体后，再放入epoll，避免
         惊群的发生。
+        后期的是
         */
         if (ngx_use_accept_mutex) {
             continue;
