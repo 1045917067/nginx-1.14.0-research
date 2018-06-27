@@ -877,24 +877,34 @@ ngx_http_core_generic_phase(ngx_http_request_t *r, ngx_http_phase_handler_t *ph)
     ngx_log_debug1(NGX_LOG_DEBUG_HTTP, r->connection->log, 0,
                    "generic phase: %ui", r->phase_handler);
 
+    // 调用这一阶段中各HTTP模块添加的handler处理方法
     rc = ph->handler(r);
 
+    // 如果handler方法返回NGX_OK，之后将进入下一个阶段处理，而不理会当前阶段中是否还有其它处理方法
     if (rc == NGX_OK) {
+        // 直接指向下一个处理阶段的第一个方法
         r->phase_handler = ph->next;
         return NGX_AGAIN;
     }
 
+    // 如果handler方法返回NGX_DECLINED，之后将进入下一个方法处理，这个方法可能属于当前阶段也可能属于下一阶段。
     if (rc == NGX_DECLINED) {
+        // 紧接着的下一个处理方法
         r->phase_handler++;
         return NGX_AGAIN;
     }
 
+    /*
+      如果handler方法返回NGX_AGAIN或者NGX_DONE，则意味着刚才的handler方法无法在这一次调度中处理完这一个阶段，它需要多次调度才能完成，
+      也就是说，刚刚执行过的handler方法希望：如果请求对应的事件再次被触发时，将由ngx_http_request_handler通过ngx_http_core_run_phases再次
+      调用这个handler方法。直接返回NGX_OK会使待HTTP框架立刻把控制权交还给epoll事件框架，不再处理当前请求，唯有这个请求上的事件再次被触发才会继续执行。
+    */
     if (rc == NGX_AGAIN || rc == NGX_DONE) {
         return NGX_OK;
     }
 
     /* rc == NGX_ERROR || rc == NGX_HTTP_...  */
-
+    // 如果handler方法NGX_ERROR或NGX_HTTP_开头的状态码，则调用ngx_http_finalize_request结束请求。
     ngx_http_finalize_request(r, rc);
 
     return NGX_OK;
