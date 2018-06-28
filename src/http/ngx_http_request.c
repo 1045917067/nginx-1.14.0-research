@@ -201,7 +201,9 @@ ngx_http_header_t  ngx_http_headers_in[] = {
     { ngx_null_string, 0, NULL }
 };
 
-
+/*
+这个函数是有连接来的时候调用的回调函数，它挂载在ngx_listening_s的handler结构里面
+ */
 void
 ngx_http_init_connection(ngx_connection_t *c)
 {
@@ -380,7 +382,9 @@ ngx_http_init_connection(ngx_connection_t *c)
     }
 }
 
-
+/*
+这个是具体的连接的读请求的回调
+ */
 static void
 ngx_http_wait_request_handler(ngx_event_t *rev)
 {
@@ -510,7 +514,9 @@ ngx_http_wait_request_handler(ngx_event_t *rev)
     ngx_http_process_request_line(rev);
 }
 
-
+/*
+从连接获取request数据结构
+ */
 ngx_http_request_t *
 ngx_http_create_request(ngx_connection_t *c)
 {
@@ -939,7 +945,9 @@ ngx_http_ssl_servername(ngx_ssl_conn_t *ssl_conn, int *ad, void *arg)
 
 #endif
 
-
+/*
+这个函数正式处理request的请求数据，如果http第一行处理正确，就落入处理ngx_http_process_request_headers
+ */
 static void
 ngx_http_process_request_line(ngx_event_t *rev)
 {
@@ -1212,7 +1220,9 @@ ngx_http_process_request_uri(ngx_http_request_t *r)
     return NGX_OK;
 }
 
-
+/*
+处理http头
+ */
 static void
 ngx_http_process_request_headers(ngx_event_t *rev)
 {
@@ -1375,7 +1385,7 @@ ngx_http_process_request_headers(ngx_event_t *rev)
             if (rc != NGX_OK) {
                 return;
             }
-
+            // 处理好了header头继续处理请求
             ngx_http_process_request(r);
 
             return;
@@ -1802,7 +1812,9 @@ ngx_http_process_multi_header_lines(ngx_http_request_t *r, ngx_table_elt_t *h,
     return NGX_OK;
 }
 
-
+/*
+根据解析出来的http header头进行设置
+ */
 ngx_int_t
 ngx_http_process_request_header(ngx_http_request_t *r)
 {

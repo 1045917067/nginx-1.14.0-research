@@ -592,7 +592,8 @@ ngx_conf_read_token(ngx_conf_t *cf)
     file_size = ngx_file_size(&cf->conf_file->file.info);
 
     for ( ;; ) {
-
+        // b->last用来标记缓冲区内有效内容的结束位置,
+        // 这里意味着已经读取的配置内容解析完毕
         if (b->pos >= b->last) {
 
             if (cf->conf_file->file.offset >= file_size) {

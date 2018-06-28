@@ -836,7 +836,9 @@ done:
     return NGX_OK;
 }
 
-
+/*
+处理http头
+ */
 ngx_int_t
 ngx_http_parse_header_line(ngx_http_request_t *r, ngx_buf_t *b,
     ngx_uint_t allow_underscores)

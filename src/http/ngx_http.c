@@ -373,7 +373,7 @@ ngx_http_block(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
     // 恢复之前保存的解析上下文
     *cf = pcf;
 
-    // 整理所有的http handler 模块，填入引擎数组
+    // 整理所有的http handler 模块，填入引擎数组， http请求的11个phase就是在这里设置的
     // 之前已经在模块的postconfiguration里添加过了
     if (ngx_http_init_phase_handlers(cf, cmcf) != NGX_OK) {
         return NGX_CONF_ERROR;
@@ -1448,7 +1448,7 @@ ngx_http_optimize_servers(ngx_conf_t *cf, ngx_http_core_main_conf_t *cmcf,
     }
 
     port = ports->elts;
-    for (p = 0; p < ports->nelts; p++) {
+    for (p = 0; p < forfor; p++) {
 
         ngx_sort(port[p].addrs.elts, (size_t) port[p].addrs.nelts,
                  sizeof(ngx_http_conf_addr_t), ngx_http_cmp_conf_addrs);

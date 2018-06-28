@@ -321,7 +321,7 @@ ngx_event_accept(ngx_event_t *ev)
 
 
 #if !(NGX_WIN32)
-
+// 收到消息之后的回调方法
 void
 ngx_event_recvmsg(ngx_event_t *ev)
 {

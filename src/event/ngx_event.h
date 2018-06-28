@@ -26,7 +26,9 @@ typedef struct {
 
 #endif
 
-
+/*
+这个结构说明事件，比如连接上了，读事件来了
+ */
 struct ngx_event_s {
     void            *data;
 
@@ -107,7 +109,7 @@ struct ngx_event_s {
     unsigned         available:1;
 #endif
 
-    ngx_event_handler_pt  handler;
+    ngx_event_handler_pt  handler;  // 事件消费函数，定义如何处理事件
 
 
 #if (NGX_HAVE_IOCP)
