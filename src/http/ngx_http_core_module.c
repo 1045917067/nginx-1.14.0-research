@@ -863,7 +863,30 @@ ngx_http_core_run_phases(ngx_http_request_t *r)
     }
 }
 
+/*
+ NGX_HTTP_POST_READ_PHASE、NGX_HTTP_PREACCESS_PHASE、NGX_HTTP_LOG_PHASE这三个阶段
+ 下HTTP模块的ngx_http_handler_pt方法返回的意义
 
+-------------------------------------------------------------------------------------------
+|  返回值      |                                 意义
+-------------------------------------------------------------------------------------------
+|             | 执行下一个ngx_http_phases阶段中的第一个ngx_http_handler_pt方法。意味着两点：
+|             | 1、即使当前阶段中后续还有一些HTTP模块设置了ngx_http_handler_pt处理方法，返回
+| NGX_OK      | NGX_OK之后它们也得不到执行机会。
+|             | 2、如果下一个ngx_http_phases阶段中没有任何HTTP模块设置了ngx_http_handler_pt
+|             | 处理方法，将再次寻找之后的阶段，如此循环下去。
+------------------------------------------------------------------------------------------
+|NGX_DECLINED | 按照顺序执行下一个ngx_http_handler_pt方法。这个顺序就是ngx_http_phase_engine_t
+|             | 中所有ngx_http_phase_handler_t结构体组成的数组顺序。
+------------------------------------------------------------------------------------------
+|  NGX_AGAIN  | 当前的ngx_http_handler_pt处理方法尚未结束，意味着该方法在当前阶段有机会再次调用。
+|             | 这时一般会把控制权交还给事件模块，当下次可写事件发生时会再次执行到该
+|  NGX_DONE   | ngx_http_handler_pt处理该当
+------------------------------------------------------------------------------------------
+|  NGX_ERROR  | 需要调用ngx_http_finalize_request结束请求
+|  other...   |
+------------------------------------------------------------------------------------------
+*/
 ngx_int_t
 ngx_http_core_generic_phase(ngx_http_request_t *r, ngx_http_phase_handler_t *ph)
 {
@@ -910,7 +933,25 @@ ngx_http_core_generic_phase(ngx_http_request_t *r, ngx_http_phase_handler_t *ph)
     return NGX_OK;
 }
 
+/*
+  NGX_HTTP_SERVER_REWRITE_PHASE  NGX_HTTP_REWRITE_PHASE阶段的checker方法是ngx_http_core_rewrite_phase。
+  注意，这个阶段中不存在有返回值可以使请求直接跳到下一个阶段执行。
 
+  NGX_HTTP_SERVER_REWRITE_PHASE、NGX_HTTP_REWRITE_PHASE阶段HTTP模块的ngx_http_handler_pt方法返回值意义
+  ----------------------------------------------------------------------------------------------
+  |  返回值      |                                 意义
+  ----------------------------------------------------------------------------------------------
+  | NGX_DONE    | 当前的ngx_http_hadnler_pt处理方法尚未结束，意味着该处理方法在当前阶段中有机会再次被
+  |             | 调用
+  ----------------------------------------------------------------------------------------------
+  |NGX_DECLINED | 当前ngx_http_handler_pt处理方法执行完毕，按照顺序执行下一个ngx_http_handler_pt方法
+  ----------------------------------------------------------------------------------------------
+  |  NGX_AGAIN  |
+  |  NGX_DONE   | 需要调用ngx_http_finalize_request结束请求
+  |  NGX_ERROR  |
+  |  other...   |
+  ----------------------------------------------------------------------------------------------
+*/
 ngx_int_t
 ngx_http_core_rewrite_phase(ngx_http_request_t *r, ngx_http_phase_handler_t *ph)
 {
@@ -919,13 +960,21 @@ ngx_http_core_rewrite_phase(ngx_http_request_t *r, ngx_http_phase_handler_t *ph)
     ngx_log_debug1(NGX_LOG_DEBUG_HTTP, r->connection->log, 0,
                    "rewrite phase: %ui", r->phase_handler);
 
+    // ngx_http_rewrite_handler
     rc = ph->handler(r);
-
+    /*
+      将phase_handler加1表示将要执行下一个回调方法。注意，此时返回的是NGX_AGAIN，HTTP框架不会把进程控制权交还给epoll事件框架，而
+      是继续立刻执行请求的下一个回调方法。
+    */
     if (rc == NGX_DECLINED) {
         r->phase_handler++;
         return NGX_AGAIN;
     }
 
+    /*
+     如果handler方法返回NGX_DONE，则意味着刚才的handler方法无法在这一次调度中处理完这一个阶段，它需要多次的调度才能完成。
+     注意：此时返回NGX_OK，它会使得HTTP框架立刻把控制权交还给epoll等事件模块，不再处理当前请求，唯有这个请求上的事件再次被触发时才会继续执行。
+    */
     if (rc == NGX_DONE) {
         return NGX_OK;
     }
@@ -937,7 +986,9 @@ ngx_http_core_rewrite_phase(ngx_http_request_t *r, ngx_http_phase_handler_t *ph)
     return NGX_OK;
 }
 
-
+/*
+  NGX_HTTP_FIND_CONFIG_PHASE 阶段上不能挂载任何回调函数，因为它们永远也不会被执行，该阶段完成的是Nginx的特定任务，即进行Location定位
+*/
 ngx_int_t
 ngx_http_core_find_config_phase(ngx_http_request_t *r,
     ngx_http_phase_handler_t *ph)
@@ -947,9 +998,14 @@ ngx_http_core_find_config_phase(ngx_http_request_t *r,
     ngx_int_t                  rc;
     ngx_http_core_loc_conf_t  *clcf;
 
+    // 初始化content_handler，会在ngx_http_core_content_phase里面使用
     r->content_handler = NULL;
     r->uri_changed = 0;
 
+    /*
+      解析完HTTP{}块后，ngx_http_init_static_location_trees函数会创建一颗三叉树，以加速配置查找。
+      找到所属的location，并且loc_conf也已经更新了r->loc_conf了。
+    */
     rc = ngx_http_core_find_location(r);
 
     if (rc == NGX_ERROR) {
@@ -957,8 +1013,13 @@ ngx_http_core_find_config_phase(ngx_http_request_t *r,
         return NGX_OK;
     }
 
+    // 用刚找到的loc_conf，得到其http_core模块的位置配置。
     clcf = ngx_http_get_module_loc_conf(r, ngx_http_core_module);
 
+    /*
+      该location{}必须是内部重定向(index重定向 、error_pages等重定向调用ngx_http_internal_redirect）
+      后匹配的location{}，否则不让访问该location
+    */
     if (!r->internal && clcf->internal) {
         ngx_http_finalize_request(r, NGX_HTTP_NOT_FOUND);
         return NGX_OK;
@@ -969,6 +1030,7 @@ ngx_http_core_find_config_phase(ngx_http_request_t *r,
                    (clcf->noname ? "*" : (clcf->exact_match ? "=" : "")),
                    &clcf->name);
 
+    // 更新location配置，r->content_handler = clcf->handler;设置回调,在content_phrase阶段用这个handler。
     ngx_http_update_location_config(r);
 
     ngx_log_debug2(NGX_LOG_DEBUG_HTTP, r->connection->log, 0,
@@ -978,7 +1040,7 @@ ngx_http_core_find_config_phase(ngx_http_request_t *r,
     if (r->headers_in.content_length_n != -1
         && !r->discard_body
         && clcf->client_max_body_size
-        && clcf->client_max_body_size < r->headers_in.content_length_n)
+        && clcf->client_max_body_size < r->headers_in.content_length_n) // 长度超了，拒绝
     {
         ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
                       "client intended to send too large body: %O bytes",
@@ -990,10 +1052,12 @@ ngx_http_core_find_config_phase(ngx_http_request_t *r,
         return NGX_OK;
     }
 
+    // auto redirect,需要进行重定向。下面就给客户端返回301，带上正确的location头部
     if (rc == NGX_DONE) {
         ngx_http_clear_location(r);
 
         r->headers_out.location = ngx_list_push(&r->headers_out.headers);
+        // 增加一个location头
         if (r->headers_out.location == NULL) {
             ngx_http_finalize_request(r, NGX_HTTP_INTERNAL_SERVER_ERROR);
             return NGX_OK;
@@ -1002,10 +1066,11 @@ ngx_http_core_find_config_phase(ngx_http_request_t *r,
         r->headers_out.location->hash = 1;
         ngx_str_set(&r->headers_out.location->key, "Location");
 
+        //如果客户端请求没用带参数
         if (r->args.len == 0) {
             r->headers_out.location->value = clcf->name;
 
-        } else {
+        } else { //如果客户端请求有带参数 则需要将参数也带在location后面
             len = clcf->name.len + 1 + r->args.len;
             p = ngx_pnalloc(r->pool, len);
 
@@ -1031,16 +1096,21 @@ ngx_http_core_find_config_phase(ngx_http_request_t *r,
     return NGX_AGAIN;
 }
 
-
+/*
+  内部重定向是从NGX_HTTP_SERVER_REWRITE_PHASE处继续执行(ngx_http_internal_redirect)，
+  而重新rewrite是从NGX_HTTP_FIND_CONFIG_PHASE处执行(ngx_http_core_post_rewrite_phase)
+*/
 ngx_int_t
 ngx_http_core_post_rewrite_phase(ngx_http_request_t *r,
     ngx_http_phase_handler_t *ph)
 {
+    // 判断一下是否内部重定向超过11次。没做其他事情。
     ngx_http_core_srv_conf_t  *cscf;
 
     ngx_log_debug1(NGX_LOG_DEBUG_HTTP, r->connection->log, 0,
                    "post rewrite phase: %ui", r->phase_handler);
 
+    // 不需要重新rewrite，则直接执行下一个pt 例如rewrite   ^.*$ www.baidu.com last;就会多次执行rewrite
     if (!r->uri_changed) {
         r->phase_handler++;
         return NGX_AGAIN;
@@ -1056,6 +1126,7 @@ ngx_http_core_post_rewrite_phase(ngx_http_request_t *r,
      *     unsigned  uri_changes:4
      */
 
+    // 重定向超过10次了，中断请求。
     r->uri_changes--;
 
     if (r->uri_changes == 0) {
@@ -1067,6 +1138,7 @@ ngx_http_core_post_rewrite_phase(ngx_http_request_t *r,
         return NGX_OK;
     }
 
+    // NGX_HTTP_POST_REWRITE_PHASE的下一阶段是NGX_HTTP_FIND_CONFIG_PHASE
     r->phase_handler = ph->next;
 
     cscf = ngx_http_get_module_srv_conf(r, ngx_http_core_module);
@@ -1075,13 +1147,47 @@ ngx_http_core_post_rewrite_phase(ngx_http_request_t *r,
     return NGX_AGAIN;
 }
 
+/*
+  NGX_HTTP_ACCESS_PHASE阶段下HTTP模块的ngx_http_handler_pt方法返回值意义
+  --------------------------------------------------------------------------------------------------
+  |  返回值              |                                 意义
+  --------------------------------------------------------------------------------------------------
+  |                     | 如果在nginxconf中配置了satisfy all; 那么将按照顺序执行下一个ngx_http_handler_pt
+  |                     | 处理方法。
+  | NGX_OK              | 如果在nginx.conf中配置了satisfy any; 那么将执行下一个ngx_http_phase阶段中的第一
+  |                     | 个ngx_http_handler_pt处理方法
+  --------------------------------------------------------------------------------------------------
+  |NGX_DECLINED         | 按照顺序执行下一个ngx_http_handler_pt方法。
+  --------------------------------------------------------------------------------------------------
+  |  NGX_AGAIN          | 当前的ngx_http_handler_pt处理方法尚未结束，意味着该方法在当前阶段有机会再次调用。
+  |                     | 这时会把控制权交还给事件模块，当下次可写事件发生时会再次执行到该
+  |  NGX_DONE           | ngx_http_handler_pt处理方法
+  --------------------------------------------------------------------------------------------------
+  |NGX_HTTP_FORBIDDEN   | 如果nginx.conf中配置了satisfy any，那么将ngx_http_request_t中的access_code成
+  |                     | 员设为返回值，按顺序执行下一个ngx_http_handler_pt处理方法；如果satify all，那么调
+  |NGX_HTTP_UNAUTHORIZED| 用ngx_http_finalize_request结束请求
+  --------------------------------------------------------------------------------------------------
+  |  NGX_ERROR          | 需要调用ngx_http_finalize_request结束请求
+  |  other...           |
+  --------------------------------------------------------------------------------------------------
+  从上表可以看出，NGX_HTTP_ACCESS_PHASE阶段实际上与nginx.conf配置文件中的satisfy配置项有紧密的联系，所以，任何介
+  入NGX_HTTP_ACCESS_PHASE阶段的HTTP模块，在实现ngx_http_handler_pt方法时都需要注意satisfy的参数，该参数可以由
+  ngx_http_core_loc_conf_t绪构体中得到。
 
+
+*/
 ngx_int_t
 ngx_http_core_access_phase(ngx_http_request_t *r, ngx_http_phase_handler_t *ph)
 {
     ngx_int_t                  rc;
     ngx_http_core_loc_conf_t  *clcf;
-
+    /*
+      既然NGX_HTTP_ACCESS_PHASE阶段用于控制客户端是否有权限访问服务，那么它就不需要对子请求起作用。如何判断请求究竟是来自客
+      户端的原始请求还是被派生出的子请求呢？很简单，检查ngx_http_request_t结构体中的main指针即可。ngx_ http_init_request
+      方法会把main指针指向其自身，而由这个请求派生出的其他子请求中的main指针，仍然会指向ngx_http_init_request方法初始化的原始请求。
+      因此，检查main成员与ngx_http_request_t自身的指针是否相等即可
+    */
+    // 是否是子请求，如果是子请求，说明父请求已经有权限了，因此子请求也有权限，直接跳过该NGX_HTTP_ACCESS_PHASE阶段
     if (r != r->main) {
         r->phase_handler = ph->next;
         return NGX_AGAIN;
@@ -1092,17 +1198,49 @@ ngx_http_core_access_phase(ngx_http_request_t *r, ngx_http_phase_handler_t *ph)
 
     rc = ph->handler(r);
 
+    /*
+      返回NGX_DECLINED意味着handler方法执行完毕，需要执行下一个handler方法，无论其是否属于NGX HTTP_ACCESS_PHASE阶段，
+      在这一步中只需要把phase_handler加1，同时ngx_http_core_access_phase方法返回NGX AGAIN即可。
+    */
     if (rc == NGX_DECLINED) {
         r->phase_handler++;
         return NGX_AGAIN;
     }
 
+    /*
+     返回NGX_AGAIN或者NGX_DONE意味着当前的NGX_HTTP_ACCESS_PHASE阶段没有一次性执行完毕，所以在这一步中会暂时结束当前请求的
+     处理，将控制权交还给事件模块，ngx_http_core_access_phase方法结束。当请求中对应的事件再次触发时才会继续处理该请求。
+    */
     if (rc == NGX_AGAIN || rc == NGX_DONE) {
         return NGX_OK;
     }
 
+    /*
+      由于NGX_HTTP_ACCESS_PHASE阶段是在NGX_HTTP_FIND_CONFIG_PHASE阶段之后的，因此这时请求已经找到了匹配的location配置块，
+      先把location块对应的ngx_http_core_loc_conf_t配置结构体取出来，因为这里有一个配置项satisfy是下一步需要用到的。
+    */
     clcf = ngx_http_get_module_loc_conf(r, ngx_http_core_module);
 
+    /*
+      相对于NGX_HTTP_ACCESS_PHASE阶段处理方法，satisfy配置项参数的意义
+      --------------------------------------------------------------------------------------------------
+      | satisfy         |                                 意义
+      --------------------------------------------------------------------------------------------------
+      |                 | NGX_HTTP_ACCESS_PHASE阶段可能有很多HTTP模块都对控制请求的访问权限感兴趣，那以哪一
+      |                 | 个为准呢？当satisfy all；这些HTTP模块必须同时发生作用，即以该阶段中所有的handler
+      |     all         | 方法共同决定请求的访问权限，可以理解为：这一阶段的所有handler方法必须全部返回NGX_OK才能
+      |                 | 认为请求具有访问权限
+      --------------------------------------------------------------------------------------------------
+      |                 | 与all相反，在NGX_HTTP_ACCESS_PHASE阶段，只要有任意一个HTTP模块认为请求合法，就不会再
+      |                 | 调用其它HTTP模块继续检查了，可以认为请求是具有访问权限的。实际上，这种情况有些复杂：如果
+      |                 | 其中任意一个handler方法返回NGX_OK，则认为请求具有访问权限；如果某一个handler返回了403
+      |     any         | 或401，则认为请求没有访问权限，还需要检查NGX_HTTP_ACCESS_PHASE阶段的其它handler方法。
+      |                 | any配置项下任何一个handler方法认为请求具有访问权限，就认为这一阶段执行成功，继续向下执行
+      |                 | 如果其中一个handler方法认为没有访问权限，则未必以此为准，还需要检查其它的handler方法。
+      --------------------------------------------------------------------------------------------------
+    */
+
+    // 必须NGX_HTTP_ACCESS_PHASE阶段的所有handler都返回NGX_OK才算具有权限访问
     if (clcf->satisfy == NGX_HTTP_SATISFY_ALL) {
 
         if (rc == NGX_OK) {
@@ -1111,17 +1249,24 @@ ngx_http_core_access_phase(ngx_http_request_t *r, ngx_http_phase_handler_t *ph)
         }
 
     } else {
+        //只要有一个模块的handler允许访问，该客户端就有权限
         if (rc == NGX_OK) {
             r->access_code = 0;
 
             if (r->headers_out.www_authenticate) {
                 r->headers_out.www_authenticate->hash = 0;
             }
-
+            // 直接跳过该阶段到下一阶段
             r->phase_handler = ph->next;
             return NGX_AGAIN;
         }
 
+        /*
+          如果返回值是NGX_HTTP_FORBIDDEN 或者NGX_HTTP_UNAUTHORIZED，则表示这个HTTP模块的handler方法认为请求没有权限访问服务，但
+          只要NGX_HTTP_ACCESS_PHASE阶段的任何一个handler方法返回NGX_OK就认为请求合法，所以后续的handler方法可能会更改这一结果。
+          这时将请求的access_code成员设置为handler穷法的返回值，用于传递当前HTTP模块的处理结果
+        */
+        //虽然当前模块的handler认为没权限，但后面其他模块的handler可能允许该客户端访问
         if (rc == NGX_HTTP_FORBIDDEN || rc == NGX_HTTP_UNAUTHORIZED) {
             if (r->access_code != NGX_HTTP_UNAUTHORIZED) {
                 r->access_code = rc;
@@ -1138,7 +1283,14 @@ ngx_http_core_access_phase(ngx_http_request_t *r, ngx_http_phase_handler_t *ph)
     return NGX_OK;
 }
 
-
+/*
+  NGX_HTTP_POST_ACCESS_PHASE阶段又是一个只能由HTTP框架实现的阶段，不允许HTTP模块向该阶段添加ngx_http_handler_pt处理方法。
+  这个阶段完全是为之前的NGX_HTTP_ACCESS_PHASE阶段服务的，换句话说，如果没有任何HTTP模块介入NGX_HTTP_ACCESS_PHASE阶段处理请求，
+  NGX_HTTP_POST_ACCESS_PHASE阶段就不会存在。
+  NGX_HTTP_POST_ACCESS_PHASE阶段的checker方法是ngx_http_core_post_access_phase，它的工作非常简单，
+  就是检查ngx_http_request_t请求中的access_code成员，当其不为O时就结束请求（表示没有访问权限），
+  否则继续执行下一个ngx_http_handler_pt处理方法。
+*/
 ngx_int_t
 ngx_http_core_post_access_phase(ngx_http_request_t *r,
     ngx_http_phase_handler_t *ph)
@@ -1165,7 +1317,39 @@ ngx_http_core_post_access_phase(ngx_http_request_t *r,
     return NGX_AGAIN;
 }
 
-
+/*
+  这是一个核心HTTP阶段，可以说大部分HTTP模块都会在此阶段重新定义Nginx服务器的行为。NGX_HTTP_CONTENT_PHASE
+  阶段之所以被众多HTTP模块“钟爱”，主要基于以下两个原因：
+  其一，以上9个阶段主要专注于4件基础性工作：rewrite重写URL、找到location配置块、判断请求是否具备访问权限、try_files功能优先读取
+    静态资源文件，这4个工作通常适用于绝大部分请求，因此，许多HTTP模块希望可以共享这9个阶段中已经完成的功能。
+  其二，NGX_HTTP_CONTENT_PHASE阶段与其他阶段都不相同的是，它向HTTP模块提供了两种介入该阶段的方式：
+    第一种与其他10个阶段一样，通过向全局的ngx_http_core_main_conf_t结构体的phases数组中添加ngx_http_handler_pt赴理方法来实现，
+    第二种是本阶段独有的，把希望处理请求的ngx_http_handler_pt方法设置到location相关的ngx_http_core_loc_conf_t结构体的handler指针中。
+    上面所说的第一种方式，也是HTTP模块介入其他10个阶段的唯一方式，是通过在必定会被调用的postconfiguration方法向全局的
+    ngx_http_core_main_conf_t结构体的phases[NGX_HTTP_CONTENT_PHASE]动态数组添加ngx_http_handler_pt处理方法来达成的，
+    这个处理方法将会应用于全部的HTTP请求。
+    而第二种方式是通过设置ngx_http_core_loc_conf_t结构体的handler指针来实现的，每一个location都对应着一个独立的ngx_http_core_loc_conf结
+    构体。这样，我们就不必在必定会被调用的postconfiguration方法中添加ngx_http_handler_pt处理方法了，而可以选挥在ngx_command_t的某个
+    配置项的回调方法中添加处理方法，将当前location块所属的ngx_http_core- loc—conf_t结构体中的handler设置为
+    ngx_http_handler_pt处理方法。这样做的好处是，ngx_http_handler_pt处理方法不再应用于所有的HTTP请求，仅仅当用户请求的URI匹配了
+    location时才会被调用。
+    这也就意味着它是一种完全不同于其他阶段的使用方式。 因此，当HTTP模块实现了某个ngx_http_handler_pt处理方法并希望介入NGX_HTTP_CONTENT_PHASE阶
+    段来处理用户请求时，如果希望这个ngx_http_handler_pt方法应用于所有的用户请求，则应该在ngx_http_module_t接口的postconfiguration方法中，
+    向ngx_http_core_main_conf_t结构体的phases[NGX_HTTP_CONTENT_PHASE]动态数组中添加ngx_http_handler_pt处理方法；反之，如果希望这个方式
+    仅应用于URI匹配丁某些location的用户请求，则应该在一个location下配置项的回调方法中，把ngx_http_handler_pt方法设置到ngx_http_core_loc_conf_t
+    结构体的handler中。
+    注意ngx_http_core_loc_conf_t结构体中仅有一个handler指针，它不是数组，这也就意味着如果采用上述的第二种方法添加ngx_http_handler_pt处理方法，
+    那么每个请求在NGX_HTTP_CONTENT PHASE阶段只能有一个ngx_http_handler_pt处理方法。而使用第一种方法时是没有这个限制的，NGX_HTTP_CONTENT_PHASE阶
+    段可以经由任意个HTTP模块处理。
+    当同时使用这两种方式设置ngx_http_handler_pt处理方法时，只有第二种方式设置的ngx_http_handler_pt处理方法才会生效，也就是设置
+    handler指针的方式优先级更高，而第一种方式设置的ngx_http_handler_pt处理方法将不会生效。如果一个location配置块内有多个HTTP模块的
+    配置项在解析过程都试图按照第二种方式设置ngx_http_handler_pt赴理方法，那么后面的配置项将有可能覆盖前面的配置项解析时对handler指针的设置。
+    NGX_HTTP_CONTENT_PHASE阶段的checker方法是ngx_http_core_content_phase。ngx_http_handler_pt处理方法的返回值在以上两种方式下具备了不同意义。
+    在第一种方式下，ngx_http_handler_pt处理方法无论返回任何值，都会直接调用ngx_http_finalize_request方法结束请求。当然，
+    ngx_http_finalize_request方法根据返回值的不同未必会直接结束请求。
+    在第二种方式下，如果ngx_http_handler_pt处理方法返回NGX_DECLINED，将按顺序向后执行下一个ngx_http_handler_pt处理方法；如果返回其他值，
+    则调用ngx_http_finalize_request方法结束请求。
+*/
 ngx_int_t
 ngx_http_core_content_phase(ngx_http_request_t *r,
     ngx_http_phase_handler_t *ph)
@@ -1174,6 +1358,11 @@ ngx_http_core_content_phase(ngx_http_request_t *r,
     ngx_int_t  rc;
     ngx_str_t  path;
 
+    /*
+      检测ngx_http_request_t结构体的content_handler成员是否为空，其实就是看在NGX_HTTP_FIND_CONFIG_PHASE阶段匹配了URI请求
+      的location内，是否有HTTP模块把处理方法设置到了ngx_http_core_loc_conf_t结构体的handler成员中
+    */
+    // 如果在clcf->handler中设置了方法，则直接从这里进去执行该方法，然后返回，就不会执行content阶段的其他任何方法了
     if (r->content_handler) {
         r->write_event_handler = ngx_http_request_empty_handler;
         ngx_http_finalize_request(r, r->content_handler(r));
@@ -1185,6 +1374,11 @@ ngx_http_core_content_phase(ngx_http_request_t *r,
 
     rc = ph->handler(r);
 
+    /*
+      注意:从ngx_http_core_content_phase方法中可以看到，请求在第10个阶段NGX_HTTP_CONTENT_PHASE后，并没有去调用第11个阶段NGX_HTTP_LOG_PHASE的处理
+      方法，事实上，记录访问日志是必须在请求将要结束时才能进行的，因此，NGX_HTTP_LOG_PHASE阶段的回调方法在ngx_http_free_request方法中才会调用到。
+    */
+    // 该阶段的下一阶段log阶段在请求将要结束ngx_http_free_request中调用，因此最后一个content方法处理完后结束请求
     if (rc != NGX_DECLINED) {
         ngx_http_finalize_request(r, rc);
         return NGX_OK;
@@ -1194,6 +1388,10 @@ ngx_http_core_content_phase(ngx_http_request_t *r,
 
     ph++;
 
+    /*
+      既然handler方法返回NGX__ DECLINED希望执行下一个handler方法，那么这一步把请求的phase_handler序号加1，
+      ngx_http_core_content_phase方法返回NGX_ AGAIN，表示希望HTTP框架立刻执行下一个handler方法
+    */
     if (ph->checker) {
         r->phase_handler++;
         return NGX_AGAIN;
@@ -1207,13 +1405,19 @@ ngx_http_core_content_phase(ngx_http_request_t *r,
             ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
                           "directory index of \"%s\" is forbidden", path.data);
         }
-
+        /*
+          以NGX_ HTTP FORBIDDEN作为参数调用ngx_http_finalize_request方法，表示结束请求并返回403错误码。同时，
+          ngx_http_core_content_phase方法返回NGX—OK，表示交还控制权给事件模块
+        */
         ngx_http_finalize_request(r, NGX_HTTP_FORBIDDEN);
         return NGX_OK;
     }
 
     ngx_log_error(NGX_LOG_ERR, r->connection->log, 0, "no handler found");
-
+    /*
+      以NGX HTTP NOT—FOUND作为参数调用ngx_http_finalize_request方法，表示结束请求并返回404错误码。同时，
+      ngx_http_core_content_phase方法返回NGX_OK，表示交还控制权给事件模块。
+    */
     ngx_http_finalize_request(r, NGX_HTTP_NOT_FOUND);
     return NGX_OK;
 }
