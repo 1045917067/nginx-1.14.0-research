@@ -67,3 +67,82 @@ event epoll
 这样的命令，并创建出事件驱动的模型。
 
 ## ngx_http_block
+
+这个函数是`http`模块加载的时候最重要的函数，首先，它会遍历`modules.c`中的所有 http 模块，还记得上文说的，HTTP 模块结构`ngx_module_s`中的`**ctx` 指向的是 `ngx_http_module`。
+
+![](http://tuchuang.funaio.cn/18-7-2/24841255.jpg)
+
+
+### 第一步，模块对三个层级的回调
+
+它内部有这个 HTTP 模块定义的，在各个层级（http，server，location）所需要加载回调的方法。
+
+我们这里再附带说一下 HTTP 的三个层级，这三个层级对应我们配置文件里面的三个不同的 Block 语句。
+```
+http {
+  server {
+    listen       80;
+    location {
+      root   html;
+      index  index.html;
+    }
+  }
+}
+```
+这三个层次里面的命令有可能会有重复，有冲突。比如，root这个命令，在 location 中可以有，在 server 中也可以有，如果赋值不一致的化，是上层覆盖下层，还是下层覆盖上层（当然大部分都是下层覆盖上层）。这个就在具体的模块定义的`ngx_http_module`结构中定义了 `create_main_conf`, `create_srv_conf`,...,`merge_srv_conf`等方法。这些方法的调用就是在`ngx_http_block`方法的第一步进行调用的。
+
+### 第二步，设置连接回调和请求监听回调
+
+第二步是调用方法`ngx_http_optimize_servers`。它对配置文件中的所有listening的端口和IP进行监听设置。记住，这里只是进行回调的设置，具体的`listening`和`binding`操作不是在`ngx_conf_parse`中，而是在`ngx_open_listening_sockets` 中。
+
+![](http://tuchuang.funaio.cn/18-7-2/69227664.jpg)
+
+这个XMind中有标注（xxx时候回调）的分支就是只有在事件回调的时候会进行调用，不是在`ngx_conf_parse`的时候调用的。
+
+我们再仔细看看这个脑图中的流程，在conf_parse的时候，我实际上只对HTTP连接的时候设置了一个回调函数（ngx_http_init_connection）。在有HTTP连接上来的时候，才会设置读请求的回调（ngx_http_wait_request_handler）。在这个回调，才是真正的解析 HTTP 请求的请求头，请求体等。nginx 中著名的11阶段就是在这个地方进行一个个步骤进行调用的。
+
+这里说一下回调。nginx 是由各种各样的回调组合起来的。回调就需要要求有一个事件驱动机制。在nginx中，这个事件驱动机制也是一个模块，event 模块。在编译的时候，编译程序会判断你的系统支持哪些事件驱动，比如我的是centos，支持的是epoll，在配置文件配置
+```
+event epoll;
+```
+之后，就用这个epoll事件驱动监听IO事件。其他模块和事件驱动的交互就是通过`ngx_add_event`进行事件监听和回调的。
+
+http请求由于可能请求体或者返回体比较大，所以不一定会在一个事件中完成，为了整体的 nginx 高效，http 模块在处理 http请求的时候，处理完成了一个event回调函数之后，如果没有处理完成整个HTTP，就会在event中继续注册一个回调，然后把处理权和资源都交给事件驱动中心。等待事件驱动下一次触发回调。
+
+### 第三步，初始化定义 HTTP 的11个处理阶段
+
+HTTP请求在nginx中会经过11个处理阶段和他们的checker方法：
+
+* NGX_HTTP_POST_READ_PHASE阶段（ngx_http_core_generic_phase）
+* NGX_HTTP_SERVER_REWRITE_PHASE阶段（ngx_http_rewrite_handler）
+* NGX_HTTP_FIND_CONFIG_PHASE阶段（ngx_http_core_find_config_phase）
+* NGX_HTTP_REWRITE_PHASE阶段（ngx_http_rewrite_handler）
+* NGX_HTTP_POST_REWRITE_PHASE阶段（ngx_http_core_post_rewrite_phase）
+* NGX_HTTP_PREACCESS_PHASE阶段（ngx_http_core_generic_phase）
+* NGX_HTTP_ACCESS_PHASE阶段（ngx_http_core_access_phase）
+* NGX_HTTP_POST_ACCESS_PHASE阶段（ngx_http_core_post_access_phase）
+* NGX_HTTP_TRY_FILES_PHASE阶段（ngx_http_core_try_files_phase）
+* NGX_HTTP_CONTENT_PHASE阶段（ngx_http_core_content_phase）
+* NGX_HTTP_LOG_PHASE阶段（ngx_http_log_module中的ngx_http_log_handler）
+
+就像把大象放冰箱需要几步，处理 HTTP 需要11步，这11个步骤，有的是处理配置文件，有的是处理rewrite，有的是处理权限，有的是处理日志。所以，如果我们要自己开发一个http模块，我们就需要定义我们这个http模块处理http请求的这11个阶段（当然并不是这11个阶段都可以被自定义的，有的阶段是不能被自定义模块设置的）。然后当一个请求进来的时候，就按照顺序把请求经过所有模块的这11个阶段。
+
+这里所谓的经过这些11个阶段本质上就是调用他们的 checker 方法。这些checker方法除了最后一个 NGX_HTTP_LOG_NGX_HTTP_LOG_PAHSE 是在 ngx_http_log_module 里面之外，其他的都是在 http 的 core 模块中定义好了。
+
+### 其他
+
+这里其他的函数调用就没有特别需要注意的了。
+
+## ngx_http_wait_request_handler
+
+我们继续跟着`ngx_http_optimize_servers`,`ngx_http_init_listening`,`ngx_http_add_listening`,`ngx_http_init_connection` 进入到处理http请求内容的函数里面。
+
+![](http://tuchuang.funaio.cn/18-7-2/8260342.jpg)
+
+这个函数先调用recv将http请求的数据获取到，然后调用`ngx_http_create_request`创建了 HTTP 的请求结构体。
+
+首先nginx处理的是HTTP的第一行，就是`HTTP 1.0 GET`, 从这一行，HTTP 会获取到协议，方法等。接着再调用`ngx_http_process_request_line`一行一行处理请求头。`ngx_http_read_request_header`，`ngx_http_process_request_headers`。处理完成 http header 头之后，`ngx_http_process_request` 再接着进行后续的处理
+
+`ngx_http_process_request` 设置了读和写的handler，并且把监听事件从epoll事件驱动队列中拿出来（ngx_http_block_reading），就代表这个时候是阻塞做事件处理的事情。然后再调用`ngx_http_core_run_phases`来让请求经过那11个阶段。
+
+其实并不是所有请求都需要读取整个HTTP请求体。比如你只是获取一个css文件，nginx在11个阶段中的配置读取阶段就不会再继续读取HTTP的body了。但是如果是一个fastcgi请求，在http_fastcgi的模块中，就会进入到NGX_HTTP_CONTENT_PHASE阶段，在这个阶段，它做的一个事情就是循环读取读缓存区的数据，直到读取完毕，然后进行处理，再返回结构。
