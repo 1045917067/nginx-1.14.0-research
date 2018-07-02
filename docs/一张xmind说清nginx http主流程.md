@@ -54,4 +54,16 @@ Nginx 的模块分为几类，这几类分别为 Core，Event，Conf，Http，Ma
 
 ![](http://tuchuang.funaio.cn/18-6-29/56409966.jpg)
 
-它的逻辑，就是这两步，首先使用函数`ngx_conf_read_token`先循环逐行逐字符查找，看匹配的字符，然后获取出`cmd`, 
+它的逻辑，就是这两步，首先使用函数`ngx_conf_read_token`先循环逐行逐字符查找，看匹配的字符，获取出`cmd`, 然后去所有的模块查找对应的`cmd`,调用那个查找后的`cmd->set`方法。用Http模块举例子，我们的配置文件中一定有且只有一个关键字叫http
+```
+http{
+
+}
+```
+先解析这个配置的时候发现了`http`这个关键字，然后去各个模块匹配，发现`ngx_http_module`这个模块包含了`http`命令。它对应的set方法是`ngx_http_block`。这个方法就是http模块非常重要的方法了。当然，这里顺带提一下，event模块也有类似的方法，`ngx_events_block`。它具体做的事情就是解析
+```
+event epoll
+```
+这样的命令，并创建出事件驱动的模型。
+
+## ngx_http_block
