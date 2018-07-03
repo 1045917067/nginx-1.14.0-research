@@ -120,7 +120,7 @@ typedef enum {
     NGX_HTTP_ACCESS_PHASE,          //访问权限控制阶段，比如基于ip黑白名单的权限控制，基于用户名密码的权限控制等；
     NGX_HTTP_POST_ACCESS_PHASE,     //访问权限控制的后一阶段，该阶段根据权限控制阶段的执行结果进行相应处理；
 
-    NGX_HTTP_PRECONTENT_PHASE,      //ngx以前的版本代码11个阶段有个tryfile阶段，从1.13.3以后改为了NGX_HTTP_PRECONTENT_PHASE阶段，且新加了个mirror模块。
+    NGX_HTTP_PRECONTENT_PHASE,      //ngx以前的版本代码11个阶段有个tryfile阶段，从1.13.3以后改为了 NGX_HTTP_PRECONTENT_PHASE 阶段，且新加了个mirror模块。
 
     NGX_HTTP_CONTENT_PHASE,         //内容生成阶段，该阶段产生响应，并发送到客户端；
 

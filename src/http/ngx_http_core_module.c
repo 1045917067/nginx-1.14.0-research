@@ -3398,7 +3398,7 @@ ngx_http_core_type(ngx_conf_t *cf, ngx_command_t *dummy, void *conf)
     return NGX_CONF_OK;
 }
 
-// 解析配置前操作，添加http_host、http_user_agent等核心变量
+// 解析配置前操作，添加 http_host、http_user_agent等核心变量
 // 变量的定义存储在ngx_http_variables.c:ngx_http_core_variables
 static ngx_int_t
 ngx_http_core_preconfiguration(ngx_conf_t *cf)

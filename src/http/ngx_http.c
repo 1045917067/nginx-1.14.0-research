@@ -1768,7 +1768,7 @@ ngx_http_init_listening(ngx_conf_t *cf, ngx_http_conf_port_t *port)
 
 
 // 调用ngx_create_listening添加到cycle的监听端口数组，只是添加，没有其他动作
-// 设置有连接发生时的回调函数ngx_http_init_connection
+// 设置有连接发生时的回调函数 ngx_http_init_connection
 static ngx_listening_t *
 ngx_http_add_listening(ngx_conf_t *cf, ngx_http_conf_addr_t *addr)
 {

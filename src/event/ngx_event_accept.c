@@ -18,7 +18,14 @@ static void ngx_debug_accepted_connection(ngx_event_conf_t *ecf,
     ngx_connection_t *c);
 #endif
 
-
+// Refer:
+// https://github.com/chronolaw/annotated_nginx/blob/master/nginx/src/event/ngx_event_accept.c
+// 仅接受tcp连接
+// ngx_event_process_init 里设置接受连接的回调函数为 ngx_event_accept，可以接受连接
+// 监听端口上收到连接请求时的回调函数，即事件handler
+// 从cycle的连接池里获取连接
+// 关键操作 ls->handler(c); 调用其他模块的业务handler
+// 调用来源：ngx_process_events_and_timers->ngx_process_events->accept
 void
 ngx_event_accept(ngx_event_t *ev)
 {
@@ -36,22 +43,32 @@ ngx_event_accept(ngx_event_t *ev)
     static ngx_uint_t  use_accept4 = 1;
 #endif
 
+    // 事件已经超时
     if (ev->timedout) {
+        // 遍历监听端口列表，重新加入epoll连接事件
         if (ngx_enable_accept_events((ngx_cycle_t *) ngx_cycle) != NGX_OK) {
             return;
         }
-
+        // 保证监听不超时
         ev->timedout = 0;
     }
-
+    // 得到event core模块的配置，检查是否接受多个连接
     ecf = ngx_event_get_conf(ngx_cycle->conf_ctx, ngx_event_core_module);
 
+    // rtsig在nginx 1.9.x已经删除
     if (!(ngx_event_flags & NGX_USE_KQUEUE_EVENT)) {
+        // epoll是否允许尽可能接受多个请求
+        // 这里的ev->available仅使用1个bit的内存空间
         ev->available = ecf->multi_accept;
     }
 
+    // 事件的连接对象
     lc = ev->data;
+    // 事件对应的监听端口对象
+    // 这里是一个关键，连接->事件->监听端口
+    // 决定了要进入stream还是http子系统
     ls = lc->listening;
+    // 此时还没有数据可读
     ev->ready = 0;
 
     ngx_log_debug2(NGX_LOG_DEBUG_EVENT, ev->log, 0,
@@ -60,6 +77,9 @@ ngx_event_accept(ngx_event_t *ev)
     do {
         socklen = sizeof(ngx_sockaddr_t);
 
+
+        // 调用accept接受连接，返回socket对象
+        // accept4是linux的扩展功能，可以直接把连接的socket设置为非阻塞
 #if (NGX_HAVE_ACCEPT4)
         if (use_accept4) {
             s = accept4(lc->fd, &sa.sockaddr, &socklen, SOCK_NONBLOCK);
@@ -70,9 +90,11 @@ ngx_event_accept(ngx_event_t *ev)
         s = accept(lc->fd, &sa.sockaddr, &socklen);
 #endif
 
+        // 接受连接出错
         if (s == (ngx_socket_t) -1) {
             err = ngx_socket_errno;
 
+            // EAGAIN，此时已经没有新的连接，用于multi_accept
             if (err == NGX_EAGAIN) {
                 ngx_log_debug0(NGX_LOG_DEBUG_EVENT, ev->log, err,
                                "accept() not ready");
@@ -111,22 +133,27 @@ ngx_event_accept(ngx_event_t *ev)
                 }
             }
 
+            // 系统的文件句柄数用完了
             if (err == NGX_EMFILE || err == NGX_ENFILE) {
+                // 遍历监听端口列表，删除epoll监听连接事件，不接受请求
                 if (ngx_disable_accept_events((ngx_cycle_t *) ngx_cycle, 1)
                     != NGX_OK)
                 {
                     return;
                 }
-
+                // 解锁负载均衡，允许其他进程接受请求
                 if (ngx_use_accept_mutex) {
                     if (ngx_accept_mutex_held) {
                         ngx_shmtx_unlock(&ngx_accept_mutex);
                         ngx_accept_mutex_held = 0;
                     }
 
+                    //未持有锁，暂时不接受请求
                     ngx_accept_disabled = 1;
 
                 } else {
+                    // 不使用负载均衡
+                    // 等待一下，再次尝试接受请求
                     ngx_add_timer(ev, ecf->accept_mutex_delay);
                 }
             }
@@ -138,9 +165,16 @@ ngx_event_accept(ngx_event_t *ev)
         (void) ngx_atomic_fetch_add(ngx_stat_accepted, 1);
 #endif
 
+        // 此时accept返回了一个socket描述符s
+
+        // ngx_accept_disabled是总连接数的1/8-空闲连接数
+        // 也就是说空闲连接数小于总数的1/8,那么就暂时停止接受连接
+        // 每个worker维护单独 process
+        // ngx_event_process_init中定义的ngx_cycle->connection_n
         ngx_accept_disabled = ngx_cycle->connection_n / 8
                               - ngx_cycle->free_connection_n;
 
+        // 从全局变量ngx_cycle里获取空闲链接，即free_connections链表
         c = ngx_get_connection(s, ev->log);
 
         if (c == NULL) {
@@ -152,12 +186,15 @@ ngx_event_accept(ngx_event_t *ev)
             return;
         }
 
+        // 1.10连接对象里新的字段，表示连接类型是tcp
         c->type = SOCK_STREAM;
 
 #if (NGX_STAT_STUB)
         (void) ngx_atomic_fetch_add(ngx_stat_active, 1);
 #endif
-
+        // 创建连接使用的内存池
+        // stream模块设置连接的内存池是256bytes，不可配置
+        // http模块可以在ngx_http_core_srv_conf_t里配置
         c->pool = ngx_create_pool(ls->pool_size, ev->log);
         if (c->pool == NULL) {
             ngx_close_accepted_connection(c);
@@ -167,7 +204,7 @@ ngx_event_accept(ngx_event_t *ev)
         if (socklen > (socklen_t) sizeof(ngx_sockaddr_t)) {
             socklen = sizeof(ngx_sockaddr_t);
         }
-
+        // 拷贝客户端sockaddr
         c->sockaddr = ngx_palloc(c->pool, socklen);
         if (c->sockaddr == NULL) {
             ngx_close_accepted_connection(c);
@@ -175,7 +212,7 @@ ngx_event_accept(ngx_event_t *ev)
         }
 
         ngx_memcpy(c->sockaddr, &sa, socklen);
-
+        // 连接使用一个新的日志对象
         log = ngx_palloc(c->pool, sizeof(ngx_log_t));
         if (log == NULL) {
             ngx_close_accepted_connection(c);
@@ -184,7 +221,14 @@ ngx_event_accept(ngx_event_t *ev)
 
         /* set a blocking mode for iocp and non-blocking mode for others */
 
+        // 设置socket为非阻塞
+        // ngx_inherited_nonblocking => os/unix/ngx_posix_init.c
+        // 如果linux支持accept4，那么ngx_inherited_nonblocking = true
         if (ngx_inherited_nonblocking) {
+
+            // NGX_USE_IOCP_EVENT是win32的标志
+            // 这段代码在linux里不会执行，也就是说无动作
+            // 因为accept4已经设置了socket非阻塞
             if (ngx_event_flags & NGX_USE_IOCP_EVENT) {
                 if (ngx_blocking(s) == -1) {
                     ngx_log_error(NGX_LOG_ALERT, ev->log, ngx_socket_errno,
@@ -195,6 +239,7 @@ ngx_event_accept(ngx_event_t *ev)
             }
 
         } else {
+            // 如果linux不支持accept4，需要设置为非阻塞
             if (!(ngx_event_flags & NGX_USE_IOCP_EVENT)) {
                 if (ngx_nonblocking(s) == -1) {
                     ngx_log_error(NGX_LOG_ALERT, ev->log, ngx_socket_errno,
@@ -204,9 +249,13 @@ ngx_event_accept(ngx_event_t *ev)
                 }
             }
         }
-
+        // 从监听端口拷贝
         *log = ls->log;
 
+        // 连接的收发数据函数
+        // #define ngx_recv             ngx_io.recv
+        // #define ngx_recv_chain       ngx_io.recv_chain
+        // ngx_posix_init.c里初始化为linux的底层接口
         c->recv = ngx_recv;
         c->send = ngx_send;
         c->recv_chain = ngx_recv_chain;
@@ -215,6 +264,7 @@ ngx_event_accept(ngx_event_t *ev)
         c->log = log;
         c->pool->log = log;
 
+        // 设置其他的成员
         c->socklen = socklen;
         c->listening = ls;
         c->local_sockaddr = ls->sockaddr;
@@ -231,15 +281,21 @@ ngx_event_accept(ngx_event_t *ev)
         }
 #endif
 
+        // 连接相关的读写事件
         rev = c->read;
         wev = c->write;
 
+        // 建立连接后是可写的
         wev->ready = 1;
 
+        // rtsig在nginx 1.9.x已经删除
+        // linux里这段代码不执行
         if (ngx_event_flags & NGX_USE_IOCP_EVENT) {
             rev->ready = 1;
         }
 
+        // 如果listen使用了deferred，那么建立连接时就已经有数据可读了
+        // 否则需要自己再加读事件，当有数据来时才能读取
         if (ev->deferred_accept) {
             rev->ready = 1;
 #if (NGX_HAVE_KQUEUE || NGX_HAVE_EPOLLRDHUP)
@@ -300,6 +356,9 @@ ngx_event_accept(ngx_event_t *ev)
         }
 #endif
 
+
+        // 如果事件机制不是epoll
+        // 连接的读写事件都加入监控，即有读写都会由select/poll/kqueue等收集事件并处理
         if (ngx_add_conn && (ngx_event_flags & NGX_USE_EPOLL_EVENT) == 0) {
             if (ngx_add_conn(c) == NGX_ERROR) {
                 ngx_close_accepted_connection(c);
@@ -307,21 +366,33 @@ ngx_event_accept(ngx_event_t *ev)
             }
         }
 
+        // 在linux上通常都使用epoll，所以上面的if代码不会执行
+        // 需要在后续的处理流程中自己控制读写事件的监控时机
         log->data = NULL;
         log->handler = NULL;
 
+
+        // 接受连接，收到请求的回调函数
+        // 在http模块里是http.c: ngx_http_init_connection
+        // stream模块里是ngx_stream_init_connection
+        // ngx_http_init_listening -> ngx_http_add_listening 这里设置的回调
         ls->handler(c);
 
+        // epoll不处理
         if (ngx_event_flags & NGX_USE_KQUEUE_EVENT) {
             ev->available--;
         }
 
+        // 如果ev->available = ecf->multi_accept;
+        // epoll尽可能接受多个请求，直至accept出错EAGAIN，即无新连接请求
+        // 否则epoll只接受一个请求后即退出循环
     } while (ev->available);
 }
 
 
 #if !(NGX_WIN32)
-// 收到消息之后的回调方法
+// 1.10新增函数，接受udp连接的handler
+// 流程类似ngx_event_accept
 void
 ngx_event_recvmsg(ngx_event_t *ev)
 {
@@ -642,10 +713,16 @@ ngx_event_recvmsg(ngx_event_t *ev)
 
 #endif
 
-
+// 尝试获取负载均衡锁，监听端口
+// 如未获取则不监听端口
+// 锁标志ngx_accept_mutex_held
+// 内部调用ngx_enable_accept_events/ngx_disable_accept_events
+// 在ngx_event.c:ngx_process_events_and_timers里被调用
 ngx_int_t
 ngx_trylock_accept_mutex(ngx_cycle_t *cycle)
 {
+    // 尝试锁定共享内存锁
+    // 非阻塞，会立即返回
     if (ngx_shmtx_trylock(&ngx_accept_mutex)) {
 
         ngx_log_debug0(NGX_LOG_DEBUG_EVENT, cycle->log, 0,
@@ -655,11 +732,16 @@ ngx_trylock_accept_mutex(ngx_cycle_t *cycle)
             return NGX_OK;
         }
 
+        // 之前没有持有锁，需要注册epoll事件监听端口
+        // 遍历监听端口列表，加入epoll连接事件，开始接受请求
         if (ngx_enable_accept_events(cycle) == NGX_ERROR) {
+            // 如果监听失败就需要立即解锁，函数结束
             ngx_shmtx_unlock(&ngx_accept_mutex);
             return NGX_ERROR;
         }
 
+        // 已经成功将监听事件加入epoll
+        // 设置已经获得锁的标志
         ngx_accept_events = 0;
         ngx_accept_mutex_held = 1;
 
@@ -669,6 +751,11 @@ ngx_trylock_accept_mutex(ngx_cycle_t *cycle)
     ngx_log_debug1(NGX_LOG_DEBUG_EVENT, cycle->log, 0,
                    "accept mutex lock failed: %ui", ngx_accept_mutex_held);
 
+    // 锁成功
+
+    // 之前已经持有了锁，那么就直接返回，继续监听端口
+    // ngx_accept_events在epoll里不使用
+    // rtsig在nginx 1.9.x已经删除
     if (ngx_accept_mutex_held) {
         if (ngx_disable_accept_events(cycle, 0) == NGX_ERROR) {
             return NGX_ERROR;
@@ -680,7 +767,7 @@ ngx_trylock_accept_mutex(ngx_cycle_t *cycle)
     return NGX_OK;
 }
 
-
+// 遍历监听端口列表，加入epoll连接事件，开始接受请求
 static ngx_int_t
 ngx_enable_accept_events(ngx_cycle_t *cycle)
 {
@@ -689,14 +776,19 @@ ngx_enable_accept_events(ngx_cycle_t *cycle)
     ngx_connection_t  *c;
 
     ls = cycle->listening.elts;
+    // 遍历监听端口列表
     for (i = 0; i < cycle->listening.nelts; i++) {
 
         c = ls[i].connection;
 
+        // 如果连接已经监听（读事件激活）那么就跳过
+        // rtsig在nginx 1.9.x已经删除
         if (c == NULL || c->read->active) {
             continue;
         }
 
+        // #define ngx_add_event        ngx_event_actions.add
+        // 加入读事件，即接受连接事件
         if (ngx_add_event(c->read, NGX_READ_EVENT, 0) == NGX_ERROR) {
             return NGX_ERROR;
         }
@@ -705,7 +797,7 @@ ngx_enable_accept_events(ngx_cycle_t *cycle)
     return NGX_OK;
 }
 
-
+// 遍历监听端口列表，删除epoll监听连接事件，不接受请求
 static ngx_int_t
 ngx_disable_accept_events(ngx_cycle_t *cycle, ngx_uint_t all)
 {
@@ -714,10 +806,12 @@ ngx_disable_accept_events(ngx_cycle_t *cycle, ngx_uint_t all)
     ngx_connection_t  *c;
 
     ls = cycle->listening.elts;
+    // 遍历监听端口列表
     for (i = 0; i < cycle->listening.nelts; i++) {
 
         c = ls[i].connection;
-
+        // 如果连接没有监听（读事件不激活）那么就跳过
+        // rtsig在nginx 1.9.x已经删除
         if (c == NULL || !c->read->active) {
             continue;
         }
@@ -735,6 +829,8 @@ ngx_disable_accept_events(ngx_cycle_t *cycle, ngx_uint_t all)
 
 #endif
 
+        // 删除读事件，即不接受连接事件
+        // NGX_DISABLE_EVENT暂时无用
         if (ngx_del_event(c->read, NGX_READ_EVENT, NGX_DISABLE_EVENT)
             == NGX_ERROR)
         {
@@ -746,13 +842,16 @@ ngx_disable_accept_events(ngx_cycle_t *cycle, ngx_uint_t all)
 }
 
 
+// 发生了错误，关闭一个连接
 static void
 ngx_close_accepted_connection(ngx_connection_t *c)
 {
     ngx_socket_t  fd;
-
+    // 释放连接，加入空闲链表
+    // in core/ngx_connection.c
     ngx_free_connection(c);
 
+    // 连接的描述符置为无效
     fd = c->fd;
     c->fd = (ngx_socket_t) -1;
 
@@ -761,6 +860,7 @@ ngx_close_accepted_connection(ngx_connection_t *c)
                       ngx_close_socket_n " failed");
     }
 
+    // 释放连接相关的所有内存
     if (c->pool) {
         ngx_destroy_pool(c->pool);
     }
