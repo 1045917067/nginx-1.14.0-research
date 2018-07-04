@@ -389,17 +389,19 @@ ngx_start_worker_processes(ngx_cycle_t *cycle, ngx_int_t n, ngx_int_t type)
     //传递给其他子进程的命令，打开channel
     ch.command = NGX_CMD_OPEN_CHANNEL;
 
+    //循环创建n个worker子进程
     for (i = 0; i < n; i++) {
         //fork新进程的具体工作，ngx_worker_process_cycle函数是工作进程要执行的具体工作
         ngx_spawn_process(cycle, ngx_worker_process_cycle,
                           (void *) (intptr_t) i, "worker process", type);
-        //全局数组,定义在src/os/unix/ngx_process.c文件中，存储元素类型是ngx_process_t。
         //注意，ngx_process_slot在spawn函数中已经赋值完毕，就是当前子进程的位置
+        //全局数组ngx_processes,定义在src/os/unix/ngx_process.c文件中 就是用来存储每个子进程的相关信息，如：pid，channel，进程做具体事情的接口指针等等，这些信息就是用结构体ngx_process_t来描述的。
         ch.pid = ngx_processes[ngx_process_slot].pid;
         ch.slot = ngx_process_slot;
         ch.fd = ngx_processes[ngx_process_slot].channel[0];
 
         //建立通道,用于进程通信
+        /*在ngx_spawn_process创建好一个worker进程返回后，master进程就将worker进程的pid、worker进程在ngx_processes数组中的位置及channel[0]传递给前面已经创建好的worker进程，然后继续循环开始创建下一个worker进程。刚提到一个channel[0]，这里简单说明一下：channel就是一个能够存储2个整型元素的数组而已，这个channel数组就是用于socketpair函数创建一个进程间通道之用的。master和worker进程以及worker进程之间都可以通过这样的一个通道进行通信，这个通道就是在ngx_spawn_process函数中fork之前调用socketpair创建的。*/
         ngx_pass_open_channel(cycle, &ch);
     }
 }
@@ -764,7 +766,7 @@ ngx_master_process_exit(ngx_cycle_t *cycle)
 }
 
 // worker 主流程loop
-// 1. ngx_worker_process_init调用所有module的init_process, event的init_process会注册accpet事件
+// 1. ngx_worker_process_init 调用所有module的 init_process, event的init_process会注册accpet事件
 // 2. ngx_process_events_and_timers---处理网络IO事件和时间事件
 // 3. 检查worker的signal tag(exiting/terminate/quit)
 static void
@@ -775,12 +777,14 @@ ngx_worker_process_cycle(ngx_cycle_t *cycle, void *data)
     ngx_process = NGX_PROCESS_WORKER;
     ngx_worker = worker;
 
+    //子进程初始化: 注册时accpet事件
     ngx_worker_process_init(cycle, worker);
 
     ngx_setproctitle("worker process");
 
     for ( ;; ) {
 
+        //ngx_exiting标志位为1，进程退出
         if (ngx_exiting) {
             if (ngx_event_no_timers_left() == NGX_OK) {
                 ngx_log_error(NGX_LOG_NOTICE, cycle->log, 0, "exiting");
@@ -790,14 +794,17 @@ ngx_worker_process_cycle(ngx_cycle_t *cycle, void *data)
 
         ngx_log_debug0(NGX_LOG_DEBUG_EVENT, cycle->log, 0, "worker cycle");
 
+        //处理事件的方法
         // 事件循环模型:accept/read/write, connect/write/read, timeout
         ngx_process_events_and_timers(cycle);
 
+        //强制结束进程
         if (ngx_terminate) {
             ngx_log_error(NGX_LOG_NOTICE, cycle->log, 0, "exiting");
             ngx_worker_process_exit(cycle);
         }
 
+        //优雅地退出进程
         if (ngx_quit) {
             ngx_quit = 0;
             ngx_log_error(NGX_LOG_NOTICE, cycle->log, 0,
@@ -812,6 +819,7 @@ ngx_worker_process_cycle(ngx_cycle_t *cycle, void *data)
             }
         }
 
+        //重新打开所有文件
         if (ngx_reopen) {
             ngx_reopen = 0;
             ngx_log_error(NGX_LOG_NOTICE, cycle->log, 0, "reopening logs");
@@ -820,7 +828,12 @@ ngx_worker_process_cycle(ngx_cycle_t *cycle, void *data)
     }
 }
 
-
+//https://github.com/chronolaw/annotated_nginx/blob/master/nginx/src/os/unix/ngx_process_cycle.c
+// 被ngx_worker_process_cycle()调用
+// 参数worker是进程的序号
+// 设置cpu优先级,core dump信息,unix运行的group/user
+// 切换工作路径,根据pid设置随机数种子
+// 调用所有模块的init_process,让模块进程初始化
 static void
 ngx_worker_process_init(ngx_cycle_t *cycle, ngx_int_t worker)
 {
@@ -838,8 +851,10 @@ ngx_worker_process_init(ngx_cycle_t *cycle, ngx_int_t worker)
         exit(2);
     }
 
+    // 获取核心配置
     ccf = (ngx_core_conf_t *) ngx_get_conf(cycle->conf_ctx, ngx_core_module);
 
+    // 设置cpu优先级
     if (worker >= 0 && ccf->priority != 0) {
         if (setpriority(PRIO_PROCESS, 0, ccf->priority) == -1) {
             ngx_log_error(NGX_LOG_ALERT, cycle->log, ngx_errno,
@@ -847,6 +862,7 @@ ngx_worker_process_init(ngx_cycle_t *cycle, ngx_int_t worker)
         }
     }
 
+    // 设置core dump信息
     if (ccf->rlimit_nofile != NGX_CONF_UNSET) {
         rlmt.rlim_cur = (rlim_t) ccf->rlimit_nofile;
         rlmt.rlim_max = (rlim_t) ccf->rlimit_nofile;
@@ -869,6 +885,7 @@ ngx_worker_process_init(ngx_cycle_t *cycle, ngx_int_t worker)
         }
     }
 
+    // 设置unix运行的group/user
     if (geteuid() == 0) {
         if (setgid(ccf->group) == -1) {
             ngx_log_error(NGX_LOG_EMERG, cycle->log, ngx_errno,
@@ -923,9 +940,13 @@ ngx_worker_process_init(ngx_cycle_t *cycle, ngx_int_t worker)
 #endif
     }
 
+    // 绑定cpu
     if (worker >= 0) {
+        // 根据worker id得到cpu掩码
+        // 由指令worker_cpu_affinity确定
         cpu_affinity = ngx_get_cpu_affinity(worker);
 
+        // 绑定cpu
         if (cpu_affinity) {
             ngx_setaffinity(cpu_affinity, cycle->log);
         }
@@ -942,6 +963,7 @@ ngx_worker_process_init(ngx_cycle_t *cycle, ngx_int_t worker)
 
 #endif
 
+    // 切换工作路径
     if (ccf->working_directory.len) {
         if (chdir((char *) ccf->working_directory.data) == -1) {
             ngx_log_error(NGX_LOG_ALERT, cycle->log, ngx_errno,
@@ -958,6 +980,8 @@ ngx_worker_process_init(ngx_cycle_t *cycle, ngx_int_t worker)
                       "sigprocmask() failed");
     }
 
+    // 根据pid设置随机数种子
+    // 旧实现：srandom((ngx_pid << 16) ^ ngx_time());
     tp = ngx_timeofday();
     srandom(((unsigned) ngx_pid << 16) ^ tp->sec ^ tp->msec);
 
@@ -970,8 +994,10 @@ ngx_worker_process_init(ngx_cycle_t *cycle, ngx_int_t worker)
         ls[i].previous = NULL;
     }
 
+    // 调用所有模块的init_process , 模块进程初始化hook
     for (i = 0; cycle->modules[i]; i++) {
         if (cycle->modules[i]->init_process) {
+            //比如： ngx_event_process_init
             if (cycle->modules[i]->init_process(cycle) == NGX_ERROR) {
                 /* fatal */
                 exit(2);

@@ -780,6 +780,12 @@ ngx_epoll_notify(ngx_event_handler_pt handler)
 #endif
 
 
+// epoll模块核心功能，调用epoll_wait处理发生的事件
+// 使用event_list和nevents获取内核返回的事件
+// timer是无事件发生时最多等待的时间，即超时时间
+// 如果ngx_event_find_timer返回timer==0，那么epoll不会等待，立即返回
+// 函数可以分为两部分，一是用epoll获得事件，二是处理事件，加入延后队列
+// 函数里不处理定时器，因为定时器不属于epoll事件
 static ngx_int_t
 ngx_epoll_process_events(ngx_cycle_t *cycle, ngx_msec_t timer, ngx_uint_t flags)
 {
@@ -797,17 +803,36 @@ ngx_epoll_process_events(ngx_cycle_t *cycle, ngx_msec_t timer, ngx_uint_t flags)
     ngx_log_debug1(NGX_LOG_DEBUG_EVENT, cycle->log, 0,
                    "epoll timer: %M", timer);
 
+    // 如果使用负载均衡且抢到了accept锁，那么flags里有NGX_POST_EVENTS标志
+    // 如果没有设置更新缓存时间的精度，那么flags里有NGX_UPDATE_TIME
+
+    // 调用epoll_wait处理发生的事件
+    // 使用event_list和nevents获取内核返回的事件
+    // 返回值events是实际获得的事件数量
+    // epoll_wait等待最多timer时间后返回
+    // 如果epoll有事件发生，那么等待时间timer无意义，epoll_wait立即返回
+    // 如果ngx_event_find_timer返回timer==0，那么epoll不会等待，立即返回
     events = epoll_wait(ep, event_list, (int) nevents, timer);
 
+
+    // 检查是否发生了错误
+    // 如果调用epoll_wait获得了0个或多个事件，就没有错误
     err = (events == -1) ? ngx_errno : 0;
 
+    // 如果要求更新时间，或者收到了更新时间的信号
+    // 通常event模块调用时总会传递NGX_UPDATE_TIME，这时就会更新缓存的时间
+    // sigalarm信号的处理函数设置ngx_event_timer_alarm变量
     if (flags & NGX_UPDATE_TIME || ngx_event_timer_alarm) {
         ngx_time_update();
     }
 
+    // 错误处理
     if (err) {
+
+        // 错误是由信号中断引起的
         if (err == NGX_EINTR) {
 
+            // 如果是更新时间的信号，那么就不是错误
             if (ngx_event_timer_alarm) {
                 ngx_event_timer_alarm = 0;
                 return NGX_OK;
@@ -822,25 +847,40 @@ ngx_epoll_process_events(ngx_cycle_t *cycle, ngx_msec_t timer, ngx_uint_t flags)
         ngx_log_error(level, cycle->log, err, "epoll_wait() failed");
         return NGX_ERROR;
     }
-
+    // 0个事件，说明nginx没有收到任何请求或者数据收发
     if (events == 0) {
+
+        // #define NGX_TIMER_INFINITE  (ngx_msec_t) -1
+        // 不是无限等待，在很短的时间里无事件发生，是正常现象
         if (timer != NGX_TIMER_INFINITE) {
             return NGX_OK;
         }
-
+        // 无限等待，却没有任何事件， 出错了
         ngx_log_error(NGX_LOG_ALERT, cycle->log, 0,
                       "epoll_wait() returned no events without timeout");
         return NGX_ERROR;
     }
 
+
+    // 调用epoll_wait获得了多个事件，存储在event_list里，共events个
+    // 遍历event_list数组，逐个处理事件
     for (i = 0; i < events; i++) {
+        // 从epoll结构体的union.ptr获得连接对象指针
         c = event_list[i].data.ptr;
 
+
+        // 因为目前的32位/64位的计算机指针地址低位都是0（字节对齐）
+        // 所以用最低位来存储instance标志，即一个bool值
+        // 在真正取出连接对象时需要把低位的信息去掉
         instance = (uintptr_t) c & 1;
+        // 此时才是真正的连接对象指针
         c = (ngx_connection_t *) ((uintptr_t) c & (uintptr_t) ~1);
 
+        // 优先查看连接里的读事件
         rev = c->read;
 
+        // fd == -1描述符无效
+        // instance不对，连接有错误
         if (c->fd == -1 || rev->instance != instance) {
 
             /*
@@ -853,12 +893,14 @@ ngx_epoll_process_events(ngx_cycle_t *cycle, ngx_msec_t timer, ngx_uint_t flags)
             continue;
         }
 
+        // 获取epoll的事件标志
         revents = event_list[i].events;
 
         ngx_log_debug3(NGX_LOG_DEBUG_EVENT, cycle->log, 0,
                        "epoll: fd:%d ev:%04XD d:%p",
                        c->fd, revents, event_list[i].data.ptr);
 
+        // EPOLLERR|EPOLLHUP是发生了错误
         if (revents & (EPOLLERR|EPOLLHUP)) {
             ngx_log_debug2(NGX_LOG_DEBUG_EVENT, cycle->log, 0,
                            "epoll_wait() error on fd:%d ev:%04XD",
@@ -880,6 +922,22 @@ ngx_epoll_process_events(ngx_cycle_t *cycle, ngx_msec_t timer, ngx_uint_t flags)
         }
 #endif
 
+        // 发生了错误，但没有EPOLLIN|EPOLLOUT的读写事件
+        //if ((revents & (EPOLLERR|EPOLLHUP))
+        //     && (revents & (EPOLLIN|EPOLLOUT)) == 0)
+        //{
+        //    /*
+        //     * if the error events were returned without EPOLLIN or EPOLLOUT,
+        //     * then add these flags to handle the events at least in one
+        //     * active handler
+        //     */
+
+        //    // 加上一个读写事件，保证后续有handler可以处理
+        //    // 实际上会由读事件来处理
+        //    revents |= EPOLLIN|EPOLLOUT;
+        //}
+
+        // 有读事件，且读事件是可用的
         if ((revents & EPOLLIN) && rev->active) {
 
 #if (NGX_HAVE_EPOLLRDHUP)
@@ -887,26 +945,42 @@ ngx_epoll_process_events(ngx_cycle_t *cycle, ngx_msec_t timer, ngx_uint_t flags)
                 rev->pending_eof = 1;
             }
 
+            // nginx 1.11.x新增,用在ngx_recv时检查
             rev->available = 1;
 #endif
 
+            // 读事件可用
             rev->ready = 1;
 
+            // 检查此事件是否要延后处理
+            // 如果使用负载均衡且抢到accept锁，那么flags里有NGX_POST_EVENTS标志
+            // 1.9.x使用reuseport，那么就不延后处理
             if (flags & NGX_POST_EVENTS) {
                 queue = rev->accept ? &ngx_posted_accept_events
                                     : &ngx_posted_events;
 
+
+                // 暂不处理，而是加入延后处理队列
+                // 加快事件的处理速度，避免其他进程的等待
+                // in ngx_event_posted.h,函数宏
                 ngx_post_event(rev, queue);
 
             } else {
+                // 不accept的进程不需要入队，直接处理
+                // 不延后，立即调用读事件的handler回调函数处理事件
+                // 1.9.x reuseport直接处理，省去了入队列出队列的成本，更快
                 rev->handler(rev);
             }
         }
 
+        // 读事件处理完后再查看连接里的写事件
         wev = c->write;
 
+        // 有写事件，且写事件是可用的
         if ((revents & EPOLLOUT) && wev->active) {
 
+            // fd == -1描述符无效
+            // instance不对，连接有错误
             if (c->fd == -1 || wev->instance != instance) {
 
                 /*
@@ -919,20 +993,32 @@ ngx_epoll_process_events(ngx_cycle_t *cycle, ngx_msec_t timer, ngx_uint_t flags)
                 continue;
             }
 
+            // 写事件可用
             wev->ready = 1;
+            // 1.10新增，使用complete标记多线程异步操作已经完成
 #if (NGX_THREADS)
             wev->complete = 1;
 #endif
 
+
+            // 检查此事件是否要延后处理
+            // 1.9.x使用reuseport，那么就不延后处理
             if (flags & NGX_POST_EVENTS) {
+                // 暂不处理，而是加入延后处理队列
+                // 加快事件的处理速度，避免其他进程的等待
+                // 写事件只有一个队列
+                // in ngx_event_posted.h,函数宏
                 ngx_post_event(wev, &ngx_posted_events);
 
             } else {
+                // 不accept的进程不需要入队，直接处理
+                // 不延后，立即调用写事件的handler回调函数处理事件
+                // 1.9.x reuseport直接处理，省去了入队列出队列的成本，更快
                 wev->handler(wev);
             }
         }
     }
-
+    //for循环结束，处理完epoll_wait获得的内核事件
     return NGX_OK;
 }
 
