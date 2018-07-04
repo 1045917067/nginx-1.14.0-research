@@ -504,6 +504,9 @@ ngx_http_upstream_create(ngx_http_request_t *r)
 }
 
 
+// 在proxy，fastcgi，memcached的clcf->handler中，也就是content_handler都会先调用ngx_http_upstream_create
+// 然后调用ngx_http_upstream_init
+// 这个主要是调用ngx_http_upstream_init_request
 void
 ngx_http_upstream_init(ngx_http_request_t *r)
 {
@@ -541,6 +544,7 @@ ngx_http_upstream_init(ngx_http_request_t *r)
 }
 
 
+// 这个函数会首先create_request，然后调用ngx_http_upstream_connet，向上游服务器发起connect
 static void
 ngx_http_upstream_init_request(ngx_http_request_t *r)
 {
@@ -720,7 +724,7 @@ ngx_http_upstream_init_request(ngx_http_request_t *r)
                                                NGX_HTTP_INTERNAL_SERVER_ERROR);
                 return;
             }
-
+            // 此处发起连接
             ngx_http_upstream_connect(r, u);
 
             return;
@@ -797,7 +801,7 @@ found:
     {
         u->peer.tries = u->conf->next_upstream_tries;
     }
-
+    // 发起connect
     ngx_http_upstream_connect(r, u);
 }
 
@@ -1517,6 +1521,7 @@ ngx_http_upstream_connect(ngx_http_request_t *r, ngx_http_upstream_t *u)
     u->state->connect_time = (ngx_msec_t) -1;
     u->state->header_time = (ngx_msec_t) -1;
 
+    // 此处主动向上游发起连接
     rc = ngx_event_connect_peer(&u->peer);
 
     ngx_log_debug1(NGX_LOG_DEBUG_HTTP, r->connection->log, 0,
@@ -1546,10 +1551,11 @@ ngx_http_upstream_connect(ngx_http_request_t *r, ngx_http_upstream_t *u)
     c = u->peer.connection;
 
     c->data = r;
-
+    // 主动连接的读写handler,一旦连接成功的读写事件
     c->write->handler = ngx_http_upstream_handler;
     c->read->handler = ngx_http_upstream_handler;
 
+    // 读写事件会调用upstream的读写handler
     u->write_event_handler = ngx_http_upstream_send_request_handler;
     u->read_event_handler = ngx_http_upstream_process_header;
 

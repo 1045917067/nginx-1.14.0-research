@@ -827,6 +827,7 @@ ngx_http_handler(ngx_http_request_t *r)
 
     } else {
         cmcf = ngx_http_get_module_main_conf(r, ngx_http_core_module);
+        // 在此处进行跳转了
         r->phase_handler = cmcf->phase_engine.server_rewrite_index;
     }
 
