@@ -374,7 +374,7 @@ ngx_http_block(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
     *cf = pcf;
 
     // 整理所有的http handler 模块，填入引擎数组， http请求的11个phase就是在这里设置的
-    // 之前已经在模块的postconfiguration里添加过了
+    // 之前已经在模块的 postconfiguration 里添加过了
     if (ngx_http_init_phase_handlers(cf, cmcf) != NGX_OK) {
         return NGX_CONF_ERROR;
     }
@@ -513,42 +513,61 @@ ngx_http_init_phase_handlers(ngx_conf_t *cf, ngx_http_core_main_conf_t *cmcf)
     ngx_http_phase_handler_t   *ph;
     ngx_http_phase_handler_pt   checker;
 
+
+    // 初始化两个rewrite模块的索引地址为-1，即未赋值
+    // 这两个索引用来在处理请求时快速跳转
+    // 两个分别是sever和location rewrite
     cmcf->phase_engine.server_rewrite_index = (ngx_uint_t) -1;
     cmcf->phase_engine.location_rewrite_index = (ngx_uint_t) -1;
     find_config_index = 0;
+    // 看是否有rewrite模块
     use_rewrite = cmcf->phases[NGX_HTTP_REWRITE_PHASE].handlers.nelts ? 1 : 0;
+    // 看是否有access模块
     use_access = cmcf->phases[NGX_HTTP_ACCESS_PHASE].handlers.nelts ? 1 : 0;
 
+    // 基本的四个模块数量
+    // 1.12.0调整了代码格式
     n = 1                  /* find config phase */
         + use_rewrite      /* post rewrite phase */
         + use_access;      /* post access phase */
 
+    // 统计所有的handler模块数量，但不含log阶段，注意！
     for (i = 0; i < NGX_HTTP_LOG_PHASE; i++) {
         n += cmcf->phases[i].handlers.nelts;
     }
 
+    // 创建数组
     ph = ngx_pcalloc(cf->pool,
                      n * sizeof(ngx_http_phase_handler_t) + sizeof(void *));
     if (ph == NULL) {
         return NGX_ERROR;
     }
 
+    // 加入到http core模块的配置结构体里
     cmcf->phase_engine.handlers = ph;
     n = 0;
 
+
+    // 除了log阶段，处理所有的handler模块
+    // 从最开始的post read阶段开始，直至content阶段，不包括log阶段
     for (i = 0; i < NGX_HTTP_LOG_PHASE; i++) {
         h = cmcf->phases[i].handlers.elts;
 
         switch (i) {
-
+            // 地址改写阶段
         case NGX_HTTP_SERVER_REWRITE_PHASE:
+            // 如果rewrite索引未初始化，那么设置为第一个rewrite模块
             if (cmcf->phase_engine.server_rewrite_index == (ngx_uint_t) -1) {
                 cmcf->phase_engine.server_rewrite_index = n;
             }
+            // 使用的checker，参数是当前的引擎数组，里面的handler是每个模块自己的处理函数
+            // decline:表示不处理,继续在本阶段（rewrite）里查找下一个模块
+            // done:暂时中断ngx_http_core_run_phases
             checker = ngx_http_core_rewrite_phase;
 
             break;
 
+        // 查找配置，不能介入|不能挂载自定义的handler
         case NGX_HTTP_FIND_CONFIG_PHASE:
             find_config_index = n;
 
@@ -558,29 +577,40 @@ ngx_http_init_phase_handlers(ngx_conf_t *cf, ngx_http_core_main_conf_t *cmcf)
 
             continue;
 
+        // 地址改写阶段
+        // ngx_http_core_rewrite_phase
         case NGX_HTTP_REWRITE_PHASE:
+            // 如果rewrite索引未初始化，那么设置为第一个rewrite模块
             if (cmcf->phase_engine.location_rewrite_index == (ngx_uint_t) -1) {
                 cmcf->phase_engine.location_rewrite_index = n;
             }
+            // 使用的checker，参数是当前的引擎数组，里面的handler是每个模块自己的处理函数
+            // decline:表示不处理,继续在本阶段（rewrite）里查找下一个模块
+            // done:暂时中断ngx_http_core_run_phases
             checker = ngx_http_core_rewrite_phase;
 
             break;
-
+        // 改写后，不能介入
         case NGX_HTTP_POST_REWRITE_PHASE:
             if (use_rewrite) {
                 ph->checker = ngx_http_core_post_rewrite_phase;
-                ph->next = find_config_index;
+                ph->next = find_config_index;   //在上面 NGX_HTTP_FIND_CONFIG_PHASE 阶段设置
                 n++;
                 ph++;
             }
 
             continue;
 
+        // 检查访问权限
+        // ngx_http_core_access_phase
         case NGX_HTTP_ACCESS_PHASE:
+            // 子请求不做访问控制，直接跳过本阶段
+            // decline:表示不处理,继续在本阶段（rewrite）里查找下一个模块
+            // again/done:暂时中断ngx_http_core_run_phases
             checker = ngx_http_core_access_phase;
             n++;
             break;
-
+        // 检查访问权限后，不能介入
         case NGX_HTTP_POST_ACCESS_PHASE:
             if (use_access) {
                 ph->checker = ngx_http_core_post_access_phase;
@@ -590,16 +620,34 @@ ngx_http_init_phase_handlers(ngx_conf_t *cf, ngx_http_core_main_conf_t *cmcf)
 
             continue;
 
+        // 1.13.4去掉了原try_files阶段，改为precontent
+        // 访问静态文件，不能介入
+        //case NGX_HTTP_TRY_FILES_PHASE:
+        //    if (cmcf->try_files) {
+        //        ph->checker = ngx_http_core_try_files_phase;
+        //        n++;
+        //        ph++;
+        //    }
+
+        //    continue;
+
+
+        // 处理请求，产生响应内容，最常用的阶段
+        // 这已经是处理的最后阶段了（log阶段不处理请求，不算）
+        // ngx_http_core_content_phase
         case NGX_HTTP_CONTENT_PHASE:
             checker = ngx_http_core_content_phase;
             break;
 
+        // NGX_HTTP_POST_READ_PHASE / NGX_HTTP_PREACCESS_PHASE
         default:
             checker = ngx_http_core_generic_phase;
         }
 
+        // n增加该阶段的handler数量
         n += cmcf->phases[i].handlers.nelts;
 
+        // 倒着遍历handler数组
         for (j = cmcf->phases[i].handlers.nelts - 1; j >= 0; j--) {
             ph->checker = checker;
             ph->handler = h[j];

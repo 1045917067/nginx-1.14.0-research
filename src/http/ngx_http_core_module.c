@@ -799,6 +799,13 @@ ngx_module_t  ngx_http_core_module = {
 ngx_str_t  ngx_http_core_get_method = { 3, (u_char *) "GET" };
 
 
+// 读取了完整的http请求头，开始处理请求
+// 在ngx_http_request.c:ngx_http_process_request里调用
+//
+// 启动引擎数组，即r->write_event_handler = ngx_http_core_run_phases
+// 外部请求的引擎数组起始序号是0，从头执行引擎数组,即先从Post read开始
+// 内部请求，即子请求.跳过post read，直接从server rewrite开始执行，即查找server
+// 启动引擎数组处理请求，调用ngx_http_core_run_phases
 void
 ngx_http_handler(ngx_http_request_t *r)
 {
@@ -806,6 +813,13 @@ ngx_http_handler(ngx_http_request_t *r)
 
     r->connection->log->action = NULL;
 
+    // 1.12.0里没有了unexpected_eof
+    //r->connection->unexpected_eof = 0;
+
+    // internal表示这是一个子请求
+
+    // 外部请求设置keepalive、lingering_close
+    // 非内部跳转的话
     if (!r->internal) {
         switch (r->headers_in.connection_type) {
         case 0:
@@ -821,12 +835,18 @@ ngx_http_handler(ngx_http_request_t *r)
             break;
         }
 
+        // 如果有数据或者是chunked，那么需要lingering_close，等待数据
         r->lingering_close = (r->headers_in.content_length_n > 0
                               || r->headers_in.chunked);
+
+        // 重要!!设置请求的引擎数组起始序号，从头执行引擎数组
+        // 即先从Post read开始
         r->phase_handler = 0;
 
     } else {
+        // 内部请求，即子请求
         cmcf = ngx_http_get_module_main_conf(r, ngx_http_core_module);
+        // 跳过post read，直接从server rewrite开始执行，即查找server
         r->phase_handler = cmcf->phase_engine.server_rewrite_index;
     }
 
@@ -837,6 +857,7 @@ ngx_http_handler(ngx_http_request_t *r)
     r->gzip_vary = 0;
 #endif
 
+    // 启动引擎数组，即r->write_event_handler = ngx_http_core_run_phases
     r->write_event_handler = ngx_http_core_run_phases;
     ngx_http_core_run_phases(r);
 }
@@ -865,10 +886,18 @@ ngx_http_core_run_phases(ngx_http_request_t *r)
     }
 }
 
+// NGX_HTTP_POST_READ_PHASE/NGX_HTTP_PREACCESS_PHASE
+// post read/pre-access只有一个模块会执行，之后的就跳过
+//
+// ok:模块已经处理成功，直接跳过本阶段
+// decline:表示不处理,继续在本阶段（rewrite）里查找下一个模块
+// again/done:暂时中断ngx_http_core_run_phases
+//
+// 由于r->write_event_handler = ngx_http_core_run_phases
+// 当再有写事件时会继续从之前的模块执行
+// 其他的错误，结束请求
+// 但如果count>1，则不会真正结束
 /*
- NGX_HTTP_POST_READ_PHASE、NGX_HTTP_PREACCESS_PHASE、NGX_HTTP_LOG_PHASE这三个阶段
- 下HTTP模块的ngx_http_handler_pt方法返回的意义
-
 -------------------------------------------------------------------------------------------
 |  返回值      |                                 意义
 -------------------------------------------------------------------------------------------
@@ -902,28 +931,32 @@ ngx_http_core_generic_phase(ngx_http_request_t *r, ngx_http_phase_handler_t *ph)
     ngx_log_debug1(NGX_LOG_DEBUG_HTTP, r->connection->log, 0,
                    "generic phase: %ui", r->phase_handler);
 
-    // 调用这一阶段中各HTTP模块添加的handler处理方法
+    // 调用每个模块自己的处理函数
     rc = ph->handler(r);
 
-    // 如果handler方法返回NGX_OK，之后将进入下一个阶段处理，而不理会当前阶段中是否还有其它处理方法
+    // 模块已经处理成功，直接跳过本阶段
+    // 注意不是++，而是next
+    // 意味着post read/pre-access 这两个阶段有且只会有一个模块会执行，之后的就跳过
     if (rc == NGX_OK) {
         // 直接指向下一个处理阶段的第一个方法
+        // phase_handler是处理阶段的代号
         r->phase_handler = ph->next;
         return NGX_AGAIN;
     }
 
-    // 如果handler方法返回NGX_DECLINED，之后将进入下一个方法处理，这个方法可能属于当前阶段也可能属于下一阶段。
+    // 模块handler返回decline，表示不处理
     if (rc == NGX_DECLINED) {
-        // 紧接着的下一个处理方法
+        // 继续在本阶段（rewrite）里查找下一个模块
+        // 索引加1
         r->phase_handler++;
+
+        // again继续引擎数组的循环
         return NGX_AGAIN;
     }
 
-    /*
-      如果handler方法返回NGX_AGAIN或者NGX_DONE，则意味着刚才的handler方法无法在这一次调度中处理完这一个阶段，它需要多次调度才能完成，
-      也就是说，刚刚执行过的handler方法希望：如果请求对应的事件再次被触发时，将由ngx_http_request_handler通过ngx_http_core_run_phases再次
-      调用这个handler方法。直接返回NGX_OK会使待HTTP框架立刻把控制权交还给epoll事件框架，不再处理当前请求，唯有这个请求上的事件再次被触发才会继续执行。
-    */
+    // again/done，暂时中断ngx_http_core_run_phases
+    // 由于r->write_event_handler = ngx_http_core_run_phases
+    // 当再有写事件时会继续从之前的模块执行
     if (rc == NGX_AGAIN || rc == NGX_DONE) {
         return NGX_OK;
     }
@@ -936,14 +969,22 @@ ngx_http_core_generic_phase(ngx_http_request_t *r, ngx_http_phase_handler_t *ph)
 }
 
 /*
-  NGX_HTTP_SERVER_REWRITE_PHASE  NGX_HTTP_REWRITE_PHASE阶段的checker方法是ngx_http_core_rewrite_phase。
-  注意，这个阶段中不存在有返回值可以使请求直接跳到下一个阶段执行。
+    NGX_HTTP_SERVER_REWRITE_PHASE  NGX_HTTP_REWRITE_PHASE阶段
+    使用的checker，参数是当前的引擎数组，里面的handler是每个模块自己的处理函数
 
-  NGX_HTTP_SERVER_REWRITE_PHASE、NGX_HTTP_REWRITE_PHASE阶段HTTP模块的ngx_http_handler_pt方法返回值意义
+    decline:表示不处理,继续在本阶段（rewrite）里查找下一个模块
+    done:暂时中断ngx_http_core_run_phases
+    注意，这个阶段中不存在有返回值可以使请求直接跳到下一个阶段执行。
+
+    由于r->write_event_handler = ngx_http_core_run_phases
+    当再有写事件时会继续从之前的模块执行
+    其他的错误，结束请求
+    但如果count>1，则不会真正结束
+
   ----------------------------------------------------------------------------------------------
   |  返回值      |                                 意义
   ----------------------------------------------------------------------------------------------
-  | NGX_DONE    | 当前的ngx_http_hadnler_pt处理方法尚未结束，意味着该处理方法在当前阶段中有机会再次被
+  | NGX_DONE    | 当前的ngx_http_handle_pt处理方法尚未结束，意味着该处理方法在当前阶段中有机会再次被
   |             | 调用
   ----------------------------------------------------------------------------------------------
   |NGX_DECLINED | 当前ngx_http_handler_pt处理方法执行完毕，按照顺序执行下一个ngx_http_handler_pt方法
@@ -1175,8 +1216,6 @@ ngx_http_core_post_rewrite_phase(ngx_http_request_t *r,
   从上表可以看出，NGX_HTTP_ACCESS_PHASE阶段实际上与nginx.conf配置文件中的satisfy配置项有紧密的联系，所以，任何介
   入NGX_HTTP_ACCESS_PHASE阶段的HTTP模块，在实现ngx_http_handler_pt方法时都需要注意satisfy的参数，该参数可以由
   ngx_http_core_loc_conf_t绪构体中得到。
-
-
 */
 ngx_int_t
 ngx_http_core_access_phase(ngx_http_request_t *r, ngx_http_phase_handler_t *ph)
@@ -1425,6 +1464,9 @@ ngx_http_core_content_phase(ngx_http_request_t *r,
 }
 
 
+
+// 把location里的配置拷贝到请求结构体里
+// 重点是r->content_handler = clcf->handler;
 void
 ngx_http_update_location_config(ngx_http_request_t *r)
 {
@@ -1501,6 +1543,7 @@ ngx_http_update_location_config(ngx_http_request_t *r)
         r->limit_rate = clcf->limit_rate;
     }
 
+    // 注意这里，设置了请求在location里的专用处理handler
     if (clcf->handler) {
         r->content_handler = clcf->handler;
     }
