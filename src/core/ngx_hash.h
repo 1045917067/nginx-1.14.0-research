@@ -88,12 +88,14 @@ typedef struct {
     ngx_array_t      *dns_wc_tail_hash;
 } ngx_hash_keys_arrays_t;
 
-
+/*
+ngx_table_elt_t是为HTTP头部量身定制
+*/
 typedef struct {
-    ngx_uint_t        hash;
-    ngx_str_t         key;
-    ngx_str_t         value;
-    u_char           *lowcase_key;
+    ngx_uint_t        hash; //对应的散列表结构中的位置
+    ngx_str_t         key; // 头部名称
+    ngx_str_t         value; // 头部值
+    u_char           *lowcase_key; // 小写的头部名称key
 } ngx_table_elt_t;
 
 
