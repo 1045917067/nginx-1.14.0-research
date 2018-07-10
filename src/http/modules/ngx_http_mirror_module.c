@@ -88,7 +88,7 @@ ngx_http_mirror_handler(ngx_http_request_t *r)
     ngx_int_t                    rc;
     ngx_http_mirror_ctx_t       *ctx;
     ngx_http_mirror_loc_conf_t  *mlcf;
-
+    /*当前请求非主请求，或者当前作用域并未配置 mirror 指令的话，不处理当前请求。*/
     if (r != r->main) {
         return NGX_DECLINED;
     }
@@ -100,7 +100,7 @@ ngx_http_mirror_handler(ngx_http_request_t *r)
     }
 
     ngx_log_debug0(NGX_LOG_DEBUG_HTTP, r->connection->log, 0, "mirror handler");
-
+    /*如果需要连同请求包体一起复制，那么在创建子请求之前，Nginx 需要接收完整请求包体。*/
     if (mlcf->request_body) {
         ctx = ngx_http_get_module_ctx(r, ngx_http_mirror_module);
 
@@ -116,7 +116,7 @@ ngx_http_mirror_handler(ngx_http_request_t *r)
         ctx->status = NGX_DONE;
 
         ngx_http_set_ctx(r, ctx, ngx_http_mirror_module);
-
+        /*读取请求包体,开启新的异步*/
         rc = ngx_http_read_client_request_body(r, ngx_http_mirror_body_handler);
         if (rc >= NGX_HTTP_SPECIAL_RESPONSE) {
             return rc;
@@ -125,11 +125,11 @@ ngx_http_mirror_handler(ngx_http_request_t *r)
         ngx_http_finalize_request(r, NGX_DONE);
         return NGX_DONE;
     }
-
+    /*如果并不需要复制请求包体，Nginx 则直接调用函数 ngx_http_mirror_handler_internal 创建子请求开始请求复制流程，并恢复主请求正常处理流程。*/
     return ngx_http_mirror_handler_internal(r);
 }
 
-
+/*请求包体收取完成后调用*/
 static void
 ngx_http_mirror_body_handler(ngx_http_request_t *r)
 {
@@ -138,7 +138,7 @@ ngx_http_mirror_body_handler(ngx_http_request_t *r)
     ctx = ngx_http_get_module_ctx(r, ngx_http_mirror_module);
 
     ctx->status = ngx_http_mirror_handler_internal(r);
-
+    /*防治删除产生的临时文件*/
     r->preserve_body = 1;
 
     r->write_event_handler = ngx_http_core_run_phases;
@@ -157,8 +157,9 @@ ngx_http_mirror_handler_internal(ngx_http_request_t *r)
     mlcf = ngx_http_get_module_loc_conf(r, ngx_http_mirror_module);
 
     name = mlcf->mirror->elts;
-
+    /*为每个mirror创建一个子请求*/
     for (i = 0; i < mlcf->mirror->nelts; i++) {
+        /*使用subrequest机制生成复制的请求*/
         if (ngx_http_subrequest(r, &name[i], &r->args, &sr, NULL,
                                 NGX_HTTP_SUBREQUEST_BACKGROUND)
             != NGX_OK)
@@ -170,7 +171,7 @@ ngx_http_mirror_handler_internal(ngx_http_request_t *r)
         sr->method = r->method;
         sr->method_name = r->method_name;
     }
-
+    /*请求需要被发给本阶段的下一个处理器（handler）*/
     return NGX_DECLINED;
 }
 
@@ -197,7 +198,7 @@ ngx_http_mirror_merge_loc_conf(ngx_conf_t *cf, void *parent, void *child)
 {
     ngx_http_mirror_loc_conf_t *prev = parent;
     ngx_http_mirror_loc_conf_t *conf = child;
-
+    /*mirror 配置指令可以在某个配置作用域中出现多次，它属于 「数组类配置项」 。 当内层作用域没有显式使用 mirror 配置项时，会从外层继承相关配置。*/
     ngx_conf_merge_ptr_value(conf->mirror, prev->mirror, NULL);
     ngx_conf_merge_value(conf->request_body, prev->request_body, 1);
 

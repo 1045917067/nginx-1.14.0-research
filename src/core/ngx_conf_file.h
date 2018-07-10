@@ -41,10 +41,10 @@
 
 #define NGX_CONF_ARGS_NUMBER 0x000000ff
 #define NGX_CONF_BLOCK       0x00000100     //配置指令可以接受一个配置块，如server
-#define NGX_CONF_FLAG        0x00000200     //配置指令可以接受的值是”on”或者”off”，最终会被转成bool值。
-#define NGX_CONF_ANY         0x00000400
-#define NGX_CONF_1MORE       0x00000800
-#define NGX_CONF_2MORE       0x00001000
+#define NGX_CONF_FLAG        0x00000200     //配置指令可以接受的值是”on”或者”off”，最终会被转成bool值
+#define NGX_CONF_ANY         0x00000400     //配置指令值个数任意
+#define NGX_CONF_1MORE       0x00000800     //配置指令值至少有一个
+#define NGX_CONF_2MORE       0x00001000     //配置指令值至少有两个
 
 #define NGX_DIRECT_CONF      0x00010000     //可以出现在配置文件的最外层不需要被包含，例如master_process、daemon
 

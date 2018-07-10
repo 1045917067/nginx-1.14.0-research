@@ -61,10 +61,10 @@
 
 
 /* unused                                  1 */
-#define NGX_HTTP_SUBREQUEST_IN_MEMORY      2
-#define NGX_HTTP_SUBREQUEST_WAITED         4
-#define NGX_HTTP_SUBREQUEST_CLONE          8
-#define NGX_HTTP_SUBREQUEST_BACKGROUND     16
+#define NGX_HTTP_SUBREQUEST_IN_MEMORY      2 //将该子请求的响应结果保存在内存中
+#define NGX_HTTP_SUBREQUEST_WAITED         4 //等待后续执行结果
+#define NGX_HTTP_SUBREQUEST_CLONE          8 //继续父请求处理流程
+#define NGX_HTTP_SUBREQUEST_BACKGROUND     16//创建后台子请求。此类子请求不参与主请求的响应 构造，也就不会占用主请求的响应时间，但它依然会保持对主请求的引用
 
 #define NGX_HTTP_LOG_UNSAFE                1
 
@@ -342,17 +342,17 @@ typedef ngx_int_t (*ngx_http_post_subrequest_pt)(ngx_http_request_t *r,
     void *data, ngx_int_t rc);
 
 typedef struct {
-    ngx_http_post_subrequest_pt       handler;
-    void                             *data;
+    ngx_http_post_subrequest_pt       handler;//保存了到时需要执行的回掉函数
+    void                             *data;   //保存了传递的数据
 } ngx_http_post_subrequest_t;
 
 
 typedef struct ngx_http_postponed_request_s  ngx_http_postponed_request_t;
 
 struct ngx_http_postponed_request_s {
-    ngx_http_request_t               *request;
-    ngx_chain_t                      *out;
-    ngx_http_postponed_request_t     *next;
+    ngx_http_request_t               *request; //保存了subrequest
+    ngx_chain_t                      *out;     //保存了需要发送的chain
+    ngx_http_postponed_request_t     *next;    //保存下一个postponed_request
 };
 
 
