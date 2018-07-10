@@ -2487,7 +2487,7 @@ ngx_http_subrequest(ngx_http_request_t *r,
     ngx_http_request_t            *sr;
     ngx_http_core_srv_conf_t      *cscf;
     ngx_http_postponed_request_t  *pr, *p;
-
+    /* 若没有子请求则出错返回 */
     if (r->subrequests == 0) {
         ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
                       "subrequests cycle while processing \"%V\"", uri);
@@ -2514,7 +2514,7 @@ ngx_http_subrequest(ngx_http_request_t *r,
     if (sr == NULL) {
         return NGX_ERROR;
     }
-
+    /* 设置为 HTTP 模块 */
     sr->signature = NGX_HTTP_MODULE;
 
     c = r->connection;
@@ -2540,6 +2540,7 @@ ngx_http_subrequest(ngx_http_request_t *r,
     }
 
     cscf = ngx_http_get_module_srv_conf(r, ngx_http_core_module);
+    /* 设置main、server、location级别的配置结构体指针 */
     sr->main_conf = cscf->ctx->main_conf;
     sr->srv_conf = cscf->ctx->srv_conf;
     sr->loc_conf = cscf->ctx->loc_conf;
@@ -2551,7 +2552,7 @@ ngx_http_subrequest(ngx_http_request_t *r,
     ngx_http_clear_content_length(sr);
     ngx_http_clear_accept_ranges(sr);
     ngx_http_clear_last_modified(sr);
-
+    /* 设置接收请求包体的数据结构 */
     sr->request_body = r->request_body;
 
 #if (NGX_HTTP_V2)
@@ -2580,13 +2581,13 @@ ngx_http_subrequest(ngx_http_request_t *r,
     sr->http_protocol = r->http_protocol;
 
     ngx_http_set_exten(sr);
-
+    /* 原始请求 */
     sr->main = r->main;
-    sr->parent = r;
-    sr->post_subrequest = ps;
+    sr->parent = r;/* 当前请求，即新创建子请求的父请求 */
+    sr->post_subrequest = ps;/* 子请求执行结束时，执行的回调方法 */
     sr->read_event_handler = ngx_http_request_empty_handler;
     sr->write_event_handler = ngx_http_handler;
-
+    /* 默认共享父请求的变量，也可以根据需求创建完子请求后，再创建子请求独立的变量集 */
     sr->variables = r->variables;
 
     sr->log_handler = r->log_handler;
@@ -2596,6 +2597,7 @@ ngx_http_subrequest(ngx_http_request_t *r,
     }
 
     if (!sr->background) {
+        /* 保存当前可以向out chain输出数组的请求 */
         if (c->data == r && r->postponed == NULL) {
             c->data = sr;
         }
@@ -2608,7 +2610,7 @@ ngx_http_subrequest(ngx_http_request_t *r,
         pr->request = sr;
         pr->out = NULL;
         pr->next = NULL;
-
+        /* 把该子请求挂载到其父请求的postponed链表队尾 */
         if (r->postponed) {
             for (p = r->postponed; p->next; p = p->next) { /* void */ }
             p->next = pr;
@@ -2619,7 +2621,7 @@ ngx_http_subrequest(ngx_http_request_t *r,
     }
 
     sr->internal = 1;
-
+    /* 继承父请求的部分状态 */
     sr->discard_body = r->discard_body;
     sr->expect_tested = 1;
     sr->main_filter_need_in_memory = r->main_filter_need_in_memory;
@@ -2630,7 +2632,7 @@ ngx_http_subrequest(ngx_http_request_t *r,
     tp = ngx_timeofday();
     sr->start_sec = tp->sec;
     sr->start_msec = tp->msec;
-
+    /* 增加原始请求的引用计数 */
     r->main->count++;
 
     *psr = sr;
@@ -2647,7 +2649,7 @@ ngx_http_subrequest(ngx_http_request_t *r,
 
         ngx_http_update_location_config(sr);
     }
-
+    /* 将该子请求挂载到原始请求的posted_requests链表队尾 */
     return ngx_http_post_request(sr, NULL);
 }
 

@@ -65,7 +65,9 @@ ngx_http_postpone_filter(ngx_http_request_t *r, ngx_chain_t *in)
     if (r->subrequest_in_memory) {
         return ngx_http_postpone_filter_in_memory(r, in);
     }
-
+    /*当前请求不能往out chain发送数据，如果产生了数据，新建一个节点，我们需要暂时缓存它的响应数据。
+     *函数 ngx_http_postpone_filter_add 将响应数据追加到当前请求的 r->postponed 单链表尾部，可以看出，r->postponed 不只保存该未完成处理的子请求，也会保存请求本身未发送的响应数据。
+     */
     if (r != c->data) {
 
         if (in) {
@@ -84,7 +86,8 @@ ngx_http_postpone_filter(ngx_http_request_t *r, ngx_chain_t *in)
 
         return NGX_OK;
     }
-
+    /*到这里，表示当前请求可以往out chain发送数据，如果它的postponed链表中没有子请求，也没有数据，
+             则直接发送当前产生的数据in或者继续发送out chain中之前没有发送完成的数据*/
     if (r->postponed == NULL) {
 
         if (in || c->buffered) {
@@ -93,16 +96,18 @@ ngx_http_postpone_filter(ngx_http_request_t *r, ngx_chain_t *in)
 
         return NGX_OK;
     }
-
+    /*当前请求的postponed链表中之前就存在需要处理的节点，则新建一个节点，保存当前产生的数据in，
+             并将它插入到postponed队尾*/
     if (in) {
         if (ngx_http_postpone_filter_add(r, in) != NGX_OK) {
             return NGX_ERROR;
         }
     }
-
+    /*处理postponed链表中的节点*/
     do {
         pr = r->postponed;
-
+        /* 如果该节点保存的是一个子请求，则将它加到主请求的posted_requests链表中，
+           以便下次调用ngx_http_run_posted_requests函数，处理该子节点 */
         if (pr->request) {
 
             ngx_log_debug2(NGX_LOG_DEBUG_HTTP, c->log, 0,
@@ -110,12 +115,14 @@ ngx_http_postpone_filter(ngx_http_request_t *r, ngx_chain_t *in)
                            &pr->request->uri, &pr->request->args);
 
             r->postponed = pr->next;
-
+            /* 按照后序遍历产生的序列，因为当前请求（节点）有未处理的子请求(节点)，
+               必须先处理完改子请求，才能继续处理后面的子节点。
+               这里将该子请求设置为可以往out chain发送数据的请求。  */
             c->data = pr->request;
-
+            /* 将该子请求加入主请求的posted_requests链表 */
             return ngx_http_post_request(pr->request, NULL);
         }
-
+        /* 如果该节点保存的是数据，可以直接处理该节点，将它发送到out chain */
         if (pr->out == NULL) {
             ngx_log_error(NGX_LOG_ALERT, c->log, 0,
                           "http postpone filter NULL output");

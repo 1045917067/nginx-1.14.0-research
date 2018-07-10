@@ -495,7 +495,14 @@ ngx_int_t ngx_http_auth_basic_user(ngx_http_request_t *r);
 ngx_int_t ngx_http_gzip_ok(ngx_http_request_t *r);
 #endif
 
-
+/**
+* r is the original request（当前的请求，即父请求）；
+* uri andargsrefer to the sub-request（*uri 是子请求的URI，*args是子请求URI 的参数）；
+* args 自请求的参数
+* **sr is a reference to a NULL pointer that will point to the new (sub-)request structure（**sr 是指向返回子请求，相当于值-结果传递，作为参数传递进去是指向 NULL 指针，输出结果是指向新创建的子请求）；
+* *psr is a callback for when the subrequest is finished. （*ps 是指出子请求结束时必须回调的处理方法）；
+* flags
+*/
 ngx_int_t ngx_http_subrequest(ngx_http_request_t *r,
     ngx_str_t *uri, ngx_str_t *args, ngx_http_request_t **sr,
     ngx_http_post_subrequest_t *psr, ngx_uint_t flags);
