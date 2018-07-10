@@ -75,6 +75,9 @@ ngx_module_t  ngx_http_try_files_module = {
 };
 
 
+//try_files回调函数
+//该函数是在 ngx_http_try_files_init 中设定的，处于http的 NGX_HTTP_PRECONTENT_PHASE 阶段
+//匹配对应url是否存在，如果不存在内部跳转
 static ngx_int_t
 ngx_http_try_files_handler(ngx_http_request_t *r)
 {

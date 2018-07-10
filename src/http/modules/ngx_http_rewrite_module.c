@@ -11,9 +11,12 @@
 
 
 typedef struct {
+    //remark: http://chenzhenianqing.com/articles/576.html
+    //此结构保存着code_t的实现函数数组，用来做重定向的。
+    //这里是句柄数组组成的，逻辑上分为一组一组的，每条rewrite语句占用一组，每一组可能包含好几条code()函数指针等数据。
+    //如果匹配失败就通过next跳过本组。
     ngx_array_t  *codes;        /* uintptr_t */
-
-    ngx_uint_t    stack_size;
+    ngx_uint_t    stack_size;  //这个是什么?代码里面找不到。看样子是e->sp[]数组的大小，其用来存储正则简析时，存放类似堆栈的临时值。
 
     ngx_flag_t    log;
     ngx_flag_t    uninitialized_variable_warn;
@@ -132,7 +135,14 @@ ngx_module_t  ngx_http_rewrite_module = {
     NGX_MODULE_V1_PADDING
 };
 
-
+/*
+ * ngx_http_rewrite_init函数在初始化时将这个函数加入SERVER_REWRITE_PHASE 和 REWRITE_PHASE过程中。
+   这样每次进入 ngx_http_core_run_phases()后会调用这个地方进行重定向。
+   重定向完毕后，如果不是break，就将进入下一次find config 阶段，
+   后者成功后又将进行重新的rewrite，就像有个新的请求到来一样。
+   在配置解析阶段，通过解析rewrite指令的参数建立对应的语法函数列表，设置到location的codes数组上；
+   在处理过程中ngx_http_rewrite_handler函数依次调用这些codes来解析对应的语句，拼接出rewrite后的目标URL，然后进行重定向；
+*/
 static ngx_int_t
 ngx_http_rewrite_handler(ngx_http_request_t *r)
 {
@@ -153,16 +163,19 @@ ngx_http_rewrite_handler(ngx_http_request_t *r)
     }
 
     rlcf = ngx_http_get_module_loc_conf(r, ngx_http_rewrite_module);
-
+    //如果没有处理函数，直接返回，因为这个模块肯定没有一条rewrite。也就是不需要
     if (rlcf->codes == NULL) {
-        return NGX_DECLINED;
+        return NGX_DECLINED;    //如果返回OK就代表处理完毕，不用处理i后面的其他过程了。
     }
 
+    //新建一个脚本引擎，开始进行codes的解析。
     e = ngx_pcalloc(r->pool, sizeof(ngx_http_script_engine_t));
     if (e == NULL) {
         return NGX_HTTP_INTERNAL_SERVER_ERROR;
     }
 
+    //下面的stack_size到底在哪里设置的/代码里面都找不到。
+    //功能是用来存放计算的中间结果。
     e->sp = ngx_pcalloc(r->pool,
                         rlcf->stack_size * sizeof(ngx_http_variable_value_t));
     if (e->sp == NULL) {
@@ -174,10 +187,22 @@ ngx_http_rewrite_handler(ngx_http_request_t *r)
     e->quote = 1;
     e->log = rlcf->log;
     e->status = NGX_DECLINED;
+    /*对于这样的: rewrite ^(.*)$ http://$http_host.mp4 break; 下面的循环是i这样走的
+	ngx_http_rewrite_handler
+		1. ngx_http_script_regex_start_code 解析完了正则表达式。并求出总长度，设置到了e上了
+			1.1 ngx_http_script_copy_len_code		7
+			1.2 ngx_http_script_copy_var_len_code 	18
+			1.3 ngx_http_script_copy_len_code		4	=== 29
 
-    while (*(uintptr_t *) e->ip) {
+		2. ngx_http_script_copy_code		拷贝"http://" 到e->buf
+		3. ngx_http_script_copy_var_code	拷贝"115.28.34.175:8881"
+		4. ngx_http_script_copy_code 		拷贝".mp4"
+		5. ngx_http_script_regex_end_code
+	*/
+
+    while (*(uintptr_t *) e->ip) {  //遍历每一个函数指针，分别调用他们。
         code = *(ngx_http_script_code_pt *) e->ip;
-        code(e);
+        code(e);    //执行对应指令的函数，比如if等，
     }
 
     if (e->status < NGX_HTTP_BAD_REQUEST) {
@@ -196,6 +221,8 @@ static ngx_int_t
 ngx_http_rewrite_var(ngx_http_request_t *r, ngx_http_variable_value_t *v,
     uintptr_t data)
 {
+    //这只是一个默认的get_handler，实际上会设置为对应的函数比如ngx_http_get_indexed_variable
+    //ngx_http_rewrite_set函数会将这个设置为初始的get_handler
     ngx_http_variable_t          *var;
     ngx_http_core_main_conf_t    *cmcf;
     ngx_http_rewrite_loc_conf_t  *rlcf;
@@ -302,6 +329,12 @@ ngx_http_rewrite_init(ngx_conf_t *cf)
 }
 
 
+/*
+1.解析正则表达式，提取子模式，命名子模式存入variables等；
+2.解析第四个参数last,break等。
+3.调用ngx_http_script_compile将目标字符串解析为结构化的codes句柄数组，以便解析时进行计算；
+4.根据第三步的结果，生成lcf->codes 组，后续rewrite时，一组组的进行匹配即可。失败自动跳过本组，到达下一组rewrite
+*/
 static char *
 ngx_http_rewrite(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
 {
@@ -315,7 +348,8 @@ ngx_http_rewrite(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
     ngx_http_script_regex_code_t      *regex;
     ngx_http_script_regex_end_code_t  *regex_end;
     u_char                             errstr[NGX_MAX_CONF_ERRSTR];
-
+    //在本模块的codes的尾部，这里应该算一块新的指令组的头部，增加一个开始回调ngx_http_script_regex_start_code
+    //这里申请的是ngx_http_script_regex_code_t，其第一个成员code为经常被e->ip指向的函数指针，被当做code调用的。
     regex = ngx_http_script_start_code(cf->pool, &lcf->codes,
                                        sizeof(ngx_http_script_regex_code_t));
     if (regex == NULL) {
@@ -333,18 +367,20 @@ ngx_http_rewrite(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
     rc.err.data = errstr;
 
     /* TODO: NGX_REGEX_CASELESS */
-
+    //解析正则表达式，填写ngx_http_regex_t结构并返回。正则句柄，命名子模式等都在里面了。
     regex->regex = ngx_http_regex_compile(cf, &rc);
     if (regex->regex == NULL) {
         return NGX_CONF_ERROR;
     }
 
+    //ngx_http_script_regex_start_code函数匹配正则表达式，计算目标字符串长度并分配空间。
+    //将其设置为第一个code函数，求出目标字符串大小。尾部还有ngx_http_script_regex_end_code
     regex->code = ngx_http_script_regex_start_code;
     regex->uri = 1;
-    regex->name = value[1];
+    regex->name = value[1];//记录正则表达式
 
     if (value[2].data[value[2].len - 1] == '?') {
-
+        //如果目标结果串后面用问好结尾，则nginx不会拷贝参数到后面的
         /* the last "?" drops the original arguments */
         value[2].len--;
 
@@ -358,17 +394,20 @@ ngx_http_rewrite(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
         || ngx_strncmp(value[2].data, "https://", sizeof("https://") - 1) == 0
         || ngx_strncmp(value[2].data, "$scheme", sizeof("$scheme") - 1) == 0)
     {
+        //nginx判断，如果是用http://等开头的rewrite，就代表是垮域重定向。会做302处理。
         regex->status = NGX_HTTP_MOVED_TEMPORARILY;
         regex->redirect = 1;
         last = 1;
     }
 
-    if (cf->args->nelts == 4) {
+    if (cf->args->nelts == 4) { //处理后面的参数
         if (ngx_strcmp(value[3].data, "last") == 0) {
             last = 1;
-
         } else if (ngx_strcmp(value[3].data, "break") == 0) {
             regex->break_cycle = 1;
+            //需要break，这里体现了跟last的区别，参考ngx_http_script_regex_start_code。
+            //这个标志会影响正则解析成功之后的代码，让其设置了一个url_changed=0,也就骗nginx说，URL没有变化，
+            //你不用重新来跑find config phrase了。不然还得像个新连接一样跑一遍。
             last = 1;
 
         } else if (ngx_strcmp(value[3].data, "redirect") == 0) {
@@ -391,11 +430,11 @@ ngx_http_rewrite(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
     ngx_memzero(&sc, sizeof(ngx_http_script_compile_t));
 
     sc.cf = cf;
-    sc.source = &value[2];
-    sc.lengths = &regex->lengths;
-    sc.values = &lcf->codes;
+    sc.source = &value[2];          //字符串 http://$http_host/aa.mp4
+    sc.lengths = &regex->lengths;   //输出参数，里面会包含一些如何求目标字符串长度的函数回调。如上会包含三个: 常量 变量 常量
+    sc.values = &lcf->codes;        //将子模式存入这里
     sc.variables = ngx_http_script_variables_count(&value[2]);
-    sc.main = regex;
+    sc.main = regex;                //这是顶层的表达式，里面包含了lengths等。
     sc.complete_lengths = 1;
     sc.compile_args = !regex->redirect;
 
@@ -403,12 +442,12 @@ ngx_http_rewrite(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
         return NGX_CONF_ERROR;
     }
 
-    regex = sc.main;
+    regex = sc.main;        //这里这么做的原因是可能上面会改变内存地址。
 
     regex->size = sc.size;
     regex->args = sc.args;
 
-    if (sc.variables == 0 && !sc.dup_capture) {
+    if (sc.variables == 0 && !sc.dup_capture) {//如果没有变量，那就将lengths置空，这样就不用做多余的正则解析而直接进入字符串拷贝codes
         regex->lengths = NULL;
     }
 
@@ -418,14 +457,25 @@ ngx_http_rewrite(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
     if (regex_end == NULL) {
         return NGX_CONF_ERROR;
     }
+    /*经过上面的处理，后面的rewrite会解析出如下的函数结构: rewrite ^(.*)$ http://$http_host.mp4 break;
+    ngx_http_script_regex_start_code 解析完了正则表达式。根据lengths求出总长度，申请空间。
+            ngx_http_script_copy_len_code       7
+            ngx_http_script_copy_var_len_code   18
+            ngx_http_script_copy_len_code       4   === 29
+    ngx_http_script_copy_code       拷贝"http://" 到e->buf
+    ngx_http_script_copy_var_code   拷贝"115.28.34.175:8881"
+    ngx_http_script_copy_code       拷贝".mp4"
+    ngx_http_script_regex_end_code
+    */
 
-    regex_end->code = ngx_http_script_regex_end_code;
+    regex_end->code = ngx_http_script_regex_end_code;   //结束回调。对应前面的开始。
     regex_end->uri = regex->uri;
     regex_end->args = regex->args;
-    regex_end->add_args = regex->add_args;
+    regex_end->add_args = regex->add_args;      //是否添加参数。
     regex_end->redirect = regex->redirect;
 
     if (last) {
+        //参考上面，如果rewrite 末尾有last,break,等，就不会再次解析后面的数据了，那么，就将code设置为空。
         code = ngx_http_script_add_code(lcf->codes, sizeof(uintptr_t), &regex);
         if (code == NULL) {
             return NGX_CONF_ERROR;
@@ -433,10 +483,9 @@ ngx_http_rewrite(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
 
         *code = NULL;
     }
-
+    //下一个解析句柄组的地址。
     regex->next = (u_char *) lcf->codes->elts + lcf->codes->nelts
                                               - (u_char *) regex;
-
     return NGX_CONF_OK;
 }
 

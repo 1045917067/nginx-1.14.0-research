@@ -25,7 +25,7 @@ typedef struct {
 
 
 typedef struct {
-    ngx_http_upstream_conf_t       upstream;
+    ngx_http_upstream_conf_t       upstream;    //upstream配置结构，用来存储配置信息的。u->conf = &flcf->upstream;
 
     ngx_str_t                      index;
 
@@ -37,8 +37,8 @@ typedef struct {
     ngx_array_t                   *params_source;
     ngx_array_t                   *catch_stderr;
 
-    ngx_array_t                   *fastcgi_lengths;
-    ngx_array_t                   *fastcgi_values;
+    ngx_array_t                   *fastcgi_lengths; //存放fcgi里面的脚本引擎，长度获取函数数组
+    ngx_array_t                   *fastcgi_values;  //数值拷贝数组
 
     ngx_flag_t                     keep_conn;
 
@@ -137,7 +137,7 @@ typedef struct {
 } ngx_http_fastcgi_header_small_t;
 
 
-typedef struct {
+typedef struct {//请求开始头包括正常头，加上开始请求的头部，
     ngx_http_fastcgi_header_t         h0;
     ngx_http_fastcgi_begin_request_t  br;
     ngx_http_fastcgi_header_small_t   h1;
@@ -666,7 +666,8 @@ static ngx_path_init_t  ngx_http_fastcgi_temp_path = {
     ngx_string(NGX_HTTP_FASTCGI_TEMP_PATH), { 1, 2, 0 }
 };
 
-
+//FCGI处理入口,ngx_http_core_run_phases里面当做一个内容处理模块调用的。
+//ngx_http_core_find_config_phase里面的ngx_http_update_location_config设置
 static ngx_int_t
 ngx_http_fastcgi_handler(ngx_http_request_t *r)
 {
@@ -678,7 +679,7 @@ ngx_http_fastcgi_handler(ngx_http_request_t *r)
     ngx_http_fastcgi_main_conf_t  *fmcf;
 #endif
 
-    if (ngx_http_upstream_create(r) != NGX_OK) {
+    if (ngx_http_upstream_create(r) != NGX_OK) {    //创建一个ngx_http_upstream_t结构，放到r->upstream里面去。
         return NGX_HTTP_INTERNAL_SERVER_ERROR;
     }
 
@@ -687,19 +688,19 @@ ngx_http_fastcgi_handler(ngx_http_request_t *r)
         return NGX_HTTP_INTERNAL_SERVER_ERROR;
     }
 
-    ngx_http_set_ctx(r, f, ngx_http_fastcgi_module);
+    ngx_http_set_ctx(r, f, ngx_http_fastcgi_module);                    //也就是将申请的fcgi_ctx_t放到这个请求的ctx里面
 
-    flcf = ngx_http_get_module_loc_conf(r, ngx_http_fastcgi_module);
+    flcf = ngx_http_get_module_loc_conf(r, ngx_http_fastcgi_module);    //得到fcgi的配置。(r)->loc_conf[module.ctx_index]
 
     if (flcf->fastcgi_lengths) {
-        if (ngx_http_fastcgi_eval(r, flcf) != NGX_OK) {
+        if (ngx_http_fastcgi_eval(r, flcf) != NGX_OK) {                 //计算fastcgi_pass   127.0.0.1:9000;后面的URL的内容。也就是域名解析；
             return NGX_HTTP_INTERNAL_SERVER_ERROR;
         }
     }
 
     u = r->upstream;
 
-    ngx_str_set(&u->schema, "fastcgi://");
+    ngx_str_set(&u->schema, "fastcgi://");                              //用fcgi协议。
     u->output.tag = (ngx_buf_tag_t) &ngx_http_fastcgi_module;
 
     u->conf = &flcf->upstream;
@@ -708,16 +709,17 @@ ngx_http_fastcgi_handler(ngx_http_request_t *r)
     fmcf = ngx_http_get_module_main_conf(r, ngx_http_fastcgi_module);
 
     u->caches = &fmcf->caches;
-    u->create_key = ngx_http_fastcgi_create_key;
+    u->create_key = ngx_http_fastcgi_create_key;                        //根据flcf->cache_key里面的复杂表达式计算 scgi_cache_key line;指令后面的复杂表达式line;
 #endif
 
-    u->create_request = ngx_http_fastcgi_create_request;
+    u->create_request = ngx_http_fastcgi_create_request;        //将客户端发送过来的HTTP格式数据解析为FCGI格式的包，存放在u->request_bufs链接表里面
     u->reinit_request = ngx_http_fastcgi_reinit_request;
-    u->process_header = ngx_http_fastcgi_process_header;
+    u->process_header = ngx_http_fastcgi_process_header;        //只是将HEADER放入r->headers_out里面，然后循环调用每个头的copy_handler
     u->abort_request = ngx_http_fastcgi_abort_request;
     u->finalize_request = ngx_http_fastcgi_finalize_request;
     r->state = 0;
 
+    //下面的数据结构是给event_pipe用的，用来对FCGI的数据进行buffering处理的。FCGI写死为buffering
     u->buffering = flcf->upstream.buffering;
 
     u->pipe = ngx_pcalloc(r->pool, sizeof(ngx_event_pipe_t));
@@ -725,6 +727,7 @@ ngx_http_fastcgi_handler(ngx_http_request_t *r)
         return NGX_HTTP_INTERNAL_SERVER_ERROR;
     }
 
+    //设置读取fcgi协议格式数据的回调，当解析完带有\r\n\r\n的头部的FCGI包后，后面的包解析都由这个函数进行处理。
     u->pipe->input_filter = ngx_http_fastcgi_input_filter;
     u->pipe->input_ctx = r;
 
@@ -821,6 +824,8 @@ ngx_http_fastcgi_create_key(ngx_http_request_t *r)
 #endif
 
 
+//设置FCGI的各种请求开始，请求头部，HTTP BODY数据部分的拷贝，参数拷贝等。后面基本就可以发送数据了
+//存放在u->request_bufs链接表里面
 static ngx_int_t
 ngx_http_fastcgi_create_request(ngx_http_request_t *r)
 {
@@ -855,7 +860,7 @@ ngx_http_fastcgi_create_request(ngx_http_request_t *r)
     params = &flcf->params;
 #endif
 
-    if (params->lengths) {
+    if (params->lengths) { //处理追加的FCGI参数，如fastcgi_param  SCRIPT_FILENAME    $document_root$fastcgi_script_name;
         ngx_memzero(&le, sizeof(ngx_http_script_engine_t));
 
         ngx_http_script_flush_no_cacheable_variables(r, params->flushes);
@@ -885,14 +890,14 @@ ngx_http_fastcgi_create_request(ngx_http_request_t *r)
         }
     }
 
-    if (flcf->upstream.pass_request_headers) {
+    if (flcf->upstream.pass_request_headers) { //是否要将HTTP请求头部的HEADER发送给后端，已HTTP_为前缀
 
         allocated = 0;
         lowcase_key = NULL;
 
         if (params->number) {
             n = 0;
-            part = &r->headers_in.headers.part;
+            part = &r->headers_in.headers.part; //拿到请求的头部HTTP HEADER部分，一个个遍历。
 
             while (part) {
                 n += part->nelts;
@@ -906,7 +911,7 @@ ngx_http_fastcgi_create_request(ngx_http_request_t *r)
         }
 
         part = &r->headers_in.headers.part;
-        header = part->elts;
+        header = part->elts;        //请求的HTTP HEADER K-V队列
 
         for (i = 0; /* void */; i++) {
 
@@ -962,7 +967,7 @@ ngx_http_fastcgi_create_request(ngx_http_request_t *r)
     }
 
 
-    if (len > 65535) {
+    if (len > 65535) {  //擦，太长了。最多64K的头部字段。
         ngx_log_error(NGX_LOG_ALERT, r->connection->log, 0,
                       "fastcgi request record is too big: %uz", len);
         return NGX_ERROR;

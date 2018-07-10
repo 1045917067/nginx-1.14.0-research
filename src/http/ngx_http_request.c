@@ -217,7 +217,7 @@ ngx_http_header_t  ngx_http_headers_in[] = {
 void
 ngx_http_init_connection(ngx_connection_t *c)
 {
-    ngx_uint_t              i;
+    ngx_ucint_t              i;
     ngx_event_t            *rev;
     struct sockaddr_in     *sin;
     ngx_http_port_t        *port;

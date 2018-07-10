@@ -570,7 +570,7 @@ ngx_http_init_phase_handlers(ngx_conf_t *cf, ngx_http_core_main_conf_t *cmcf)
         // 查找配置，不能介入|不能挂载自定义的handler
         case NGX_HTTP_FIND_CONFIG_PHASE:
             find_config_index = n;
-
+            //更新对应请求的content handler
             ph->checker = ngx_http_core_find_config_phase;
             n++;
             ph++;
@@ -639,7 +639,9 @@ ngx_http_init_phase_handlers(ngx_conf_t *cf, ngx_http_core_main_conf_t *cmcf)
             checker = ngx_http_core_content_phase;
             break;
 
-        // NGX_HTTP_POST_READ_PHASE / NGX_HTTP_PREACCESS_PHASE
+        // NGX_HTTP_POST_READ_PHASE
+        // NGX_HTTP_PREACCESS_PHASE
+        // NGX_HTTP_PRECONTENT_PHASE
         default:
             checker = ngx_http_core_generic_phase;
         }
