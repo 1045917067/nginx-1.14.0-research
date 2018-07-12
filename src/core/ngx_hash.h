@@ -12,17 +12,17 @@
 #include <ngx_config.h>
 #include <ngx_core.h>
 
-
+/* hash散列表中元素的结构，采用键值及其所以应的值<key，value>*/
 typedef struct {
-    void             *value;
-    u_short           len;
-    u_char            name[1];
+    void             *value; /* 指向用户自定义的数据 */
+    u_short           len;  /* 键值key的长度 */
+    u_char            name[1]; /* 键值key的第一个字符，数组名name表示指向键值key首地址 */
 } ngx_hash_elt_t;
 
-
+/* 基本hash散列表结构 */
 typedef struct {
-    ngx_hash_elt_t  **buckets;
-    ngx_uint_t        size;
+    ngx_hash_elt_t  **buckets; /* 指向hash散列表第一个存储元素的桶 */
+    ngx_uint_t        size; /* hash散列表的桶个数 */
 } ngx_hash_t;
 
 
@@ -31,11 +31,11 @@ typedef struct {
     void             *value;
 } ngx_hash_wildcard_t;
 
-
+/* 计算待添加元素的hash元素结构 */
 typedef struct {
-    ngx_str_t         key;
-    ngx_uint_t        key_hash;
-    void             *value;
+    ngx_str_t         key; /* 元素关键字 */
+    ngx_uint_t        key_hash; /* 元素关键字key计算出的hash值 */
+    void             *value; /* 指向关键字key对应的值，组成hash表元素：键-值<key，value> */
 } ngx_hash_key_t;
 
 
@@ -48,17 +48,17 @@ typedef struct {
     ngx_hash_wildcard_t  *wc_tail;
 } ngx_hash_combined_t;
 
-
+/* 初始化hash结构 */
 typedef struct {
-    ngx_hash_t       *hash;
-    ngx_hash_key_pt   key;
+    ngx_hash_t       *hash; /* 指向待初始化的基本hash结构 */
+    ngx_hash_key_pt   key; /* hash 函数指针 */
 
-    ngx_uint_t        max_size;
-    ngx_uint_t        bucket_size;
+    ngx_uint_t        max_size; /* hash表中桶bucket的最大个数 */
+    ngx_uint_t        bucket_size; /* 每个桶bucket的存储空间 */
 
-    char             *name;
-    ngx_pool_t       *pool;
-    ngx_pool_t       *temp_pool;
+    char             *name; /* hash结构的名称(仅在错误日志中使用) */
+    ngx_pool_t       *pool; /* 分配hash结构的内存池 */
+    ngx_pool_t       *temp_pool; /* 分配临时数据空间的内存池，仅在初始化hash表前，用于分配一些临时数组 */
 } ngx_hash_init_t;
 
 
