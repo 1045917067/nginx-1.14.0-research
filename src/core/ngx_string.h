@@ -14,33 +14,33 @@
 
 
 typedef struct {
-    size_t      len;
-    u_char     *data;
-} ngx_str_t;
+    size_t      len;  //字符串长度
+    u_char     *data; //字符串指针
+} ngx_str_t; // 这个结构代表一个字符串
 
 
 typedef struct {
     ngx_str_t   key;
     ngx_str_t   value;
-} ngx_keyval_t;
+} ngx_keyval_t; // 这个代表一个key value字典结构
 
 
 typedef struct {
-    unsigned    len:28;
+    unsigned    len:28; //变量值数据长度
 
-    unsigned    valid:1;
-    unsigned    no_cacheable:1;
-    unsigned    not_found:1;
-    unsigned    escape:1;
+    unsigned    valid:1; //该变量值是否可用
+    unsigned    no_cacheable:1; //该变量值是否不能缓存
+    unsigned    not_found:1; //对应变量不存在
+    unsigned    escape:1; //变量值内容中的特殊字符是否进行了转义
 
-    u_char     *data;
-} ngx_variable_value_t;
+    u_char     *data; //变量值的数据
+} ngx_variable_value_t; //这个代表一个“变量”，除了u_char之外，有一些变量的属性
 
 
 #define ngx_string(str)     { sizeof(str) - 1, (u_char *) str }
 #define ngx_null_string     { 0, NULL }
 #define ngx_str_set(str, text)                                               \
-    (str)->len = sizeof(text) - 1; (str)->data = (u_char *) text
+    (str)->len = sizeof(text) - 1; (str)->data = (u_char *) text  // 这个str_set函数只是做了指针切换，没有深度拷贝
 #define ngx_str_null(str)   (str)->len = 0; (str)->data = NULL
 
 

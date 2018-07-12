@@ -1062,6 +1062,7 @@ ngx_http_script_regex_start_code(ngx_http_script_engine_t *e)
 }
 
 
+//执行 URL decode 等收尾工作
 void
 ngx_http_script_regex_end_code(ngx_http_script_engine_t *e)
 {
@@ -1239,6 +1240,7 @@ ngx_http_script_copy_capture_len_code(ngx_http_script_engine_t *e)
 }
 
 
+//保存跳转目标到 rewrite 描述结构缓存中
 void
 ngx_http_script_copy_capture_code(ngx_http_script_engine_t *e)
 {

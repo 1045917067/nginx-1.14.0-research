@@ -913,7 +913,9 @@ ngx_filename_cmp(u_char *s1, u_char *s2, size_t n)
     return 0;
 }
 
-
+/*
+字符串转化为ngx_int_t类型的函数
+*/
 ngx_int_t
 ngx_atoi(u_char *line, size_t n)
 {
@@ -997,7 +999,7 @@ ngx_atofp(u_char *line, size_t n, size_t point)
     return value;
 }
 
-
+//将字符转化为ssize_t
 ssize_t
 ngx_atosz(u_char *line, size_t n)
 {

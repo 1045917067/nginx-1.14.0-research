@@ -887,7 +887,7 @@ ngx_http_core_run_phases(ngx_http_request_t *r)
     }
 }
 
-// NGX_HTTP_POST_READ_PHASE/NGX_HTTP_PREACCESS_PHASE
+// NGX_HTTP_POST_READ_PHASE/NGX_HTTP_PREACCESS_PHASE/NGX_HTTP_PRECONTENT_PHASE
 // post read/pre-access只有一个模块会执行，之后的就跳过
 //
 // ok:模块已经处理成功，直接跳过本阶段
@@ -970,6 +970,8 @@ ngx_http_core_generic_phase(ngx_http_request_t *r, ngx_http_phase_handler_t *ph)
 }
 
 /*
+ * 在配置解析阶段，通过解析rewrite指令的参数建立对应的语法函数列表，设置到location的codes数组上；
+ * 在处理过程中ngx_http_rewrite_handler函数依次调用这些codes来解析对应的语句，拼接出rewrite后的目标URL，然后进行重定向；
     NGX_HTTP_SERVER_REWRITE_PHASE  NGX_HTTP_REWRITE_PHASE阶段
     使用的checker，参数是当前的引擎数组，里面的handler是每个模块自己的处理函数
 
@@ -1047,7 +1049,7 @@ ngx_http_core_find_config_phase(ngx_http_request_t *r,
     r->uri_changed = 0;
 
     /*
-      解析完HTTP{}块后，ngx_http_init_static_location_trees函数会创建一颗三叉树，以加速配置查找。
+      解析完HTTP{}块后，ngx_http_init_static_location_trees 函数会创建一颗三叉树，以加速配置查找。
       找到所属的location，并且loc_conf也已经更新了r->loc_conf了。
     */
     rc = ngx_http_core_find_location(r);
@@ -1401,7 +1403,7 @@ ngx_http_core_content_phase(ngx_http_request_t *r,
     ngx_str_t  path;
 
     /*
-      检测ngx_http_request_t结构体的content_handler成员是否为空，其实就是看在NGX_HTTP_FIND_CONFIG_PHASE阶段匹配了URI请求
+      检测ngx_http_request_t结构体的content_handler成员是否为空，其实就是看在 NGX_HTTP_FIND_CONFIG_PHASE阶段匹配了URI请求
       的location内，是否有HTTP模块把处理方法设置到了ngx_http_core_loc_conf_t结构体的handler成员中
     */
     // 如果在clcf->handler中设置了方法，则直接从这里进去执行该方法，然后返回，就不会执行content阶段的其他任何方法了
@@ -2487,7 +2489,7 @@ ngx_http_subrequest(ngx_http_request_t *r,
     ngx_http_request_t            *sr;
     ngx_http_core_srv_conf_t      *cscf;
     ngx_http_postponed_request_t  *pr, *p;
-
+    /* 若没有子请求则出错返回 */
     if (r->subrequests == 0) {
         ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
                       "subrequests cycle while processing \"%V\"", uri);
@@ -2514,7 +2516,7 @@ ngx_http_subrequest(ngx_http_request_t *r,
     if (sr == NULL) {
         return NGX_ERROR;
     }
-
+    /* 设置为 HTTP 模块 */
     sr->signature = NGX_HTTP_MODULE;
 
     c = r->connection;
@@ -2540,6 +2542,7 @@ ngx_http_subrequest(ngx_http_request_t *r,
     }
 
     cscf = ngx_http_get_module_srv_conf(r, ngx_http_core_module);
+    /* 设置main、server、location级别的配置结构体指针 */
     sr->main_conf = cscf->ctx->main_conf;
     sr->srv_conf = cscf->ctx->srv_conf;
     sr->loc_conf = cscf->ctx->loc_conf;
@@ -2551,7 +2554,7 @@ ngx_http_subrequest(ngx_http_request_t *r,
     ngx_http_clear_content_length(sr);
     ngx_http_clear_accept_ranges(sr);
     ngx_http_clear_last_modified(sr);
-
+    /* 设置接收请求包体的数据结构 */
     sr->request_body = r->request_body;
 
 #if (NGX_HTTP_V2)
@@ -2580,13 +2583,13 @@ ngx_http_subrequest(ngx_http_request_t *r,
     sr->http_protocol = r->http_protocol;
 
     ngx_http_set_exten(sr);
-
+    /* 原始请求 */
     sr->main = r->main;
-    sr->parent = r;
-    sr->post_subrequest = ps;
+    sr->parent = r;/* 当前请求，即新创建子请求的父请求 */
+    sr->post_subrequest = ps;/* 子请求执行结束时，执行的回调方法 */
     sr->read_event_handler = ngx_http_request_empty_handler;
     sr->write_event_handler = ngx_http_handler;
-
+    /* 默认共享父请求的变量，也可以根据需求创建完子请求后，再创建子请求独立的变量集 */
     sr->variables = r->variables;
 
     sr->log_handler = r->log_handler;
@@ -2596,6 +2599,7 @@ ngx_http_subrequest(ngx_http_request_t *r,
     }
 
     if (!sr->background) {
+        /* 保存当前可以向out chain输出数组的请求 */
         if (c->data == r && r->postponed == NULL) {
             c->data = sr;
         }
@@ -2608,7 +2612,7 @@ ngx_http_subrequest(ngx_http_request_t *r,
         pr->request = sr;
         pr->out = NULL;
         pr->next = NULL;
-
+        /* 把该子请求挂载到其父请求的postponed链表队尾 */
         if (r->postponed) {
             for (p = r->postponed; p->next; p = p->next) { /* void */ }
             p->next = pr;
@@ -2619,7 +2623,7 @@ ngx_http_subrequest(ngx_http_request_t *r,
     }
 
     sr->internal = 1;
-
+    /* 继承父请求的部分状态 */
     sr->discard_body = r->discard_body;
     sr->expect_tested = 1;
     sr->main_filter_need_in_memory = r->main_filter_need_in_memory;
@@ -2630,7 +2634,7 @@ ngx_http_subrequest(ngx_http_request_t *r,
     tp = ngx_timeofday();
     sr->start_sec = tp->sec;
     sr->start_msec = tp->msec;
-
+    /* 增加原始请求的引用计数 */
     r->main->count++;
 
     *psr = sr;
@@ -2647,7 +2651,7 @@ ngx_http_subrequest(ngx_http_request_t *r,
 
         ngx_http_update_location_config(sr);
     }
-
+    /* 将该子请求挂载到原始请求的posted_requests链表队尾 */
     return ngx_http_post_request(sr, NULL);
 }
 
@@ -2657,7 +2661,7 @@ ngx_http_internal_redirect(ngx_http_request_t *r,
     ngx_str_t *uri, ngx_str_t *args)
 {
     ngx_http_core_srv_conf_t  *cscf;
-
+    /* 内部重定向，NGINX为防止请求的无限内部跳转，限定了内部重定向次数的上限为NGX_HTTP_MAX_URI_CHANGES + 1 */
     r->uri_changes--;
 
     if (r->uri_changes == 0) {
@@ -2669,7 +2673,7 @@ ngx_http_internal_redirect(ngx_http_request_t *r,
         ngx_http_finalize_request(r, NGX_HTTP_INTERNAL_SERVER_ERROR);
         return NGX_DONE;
     }
-
+    /* 内部重定向前修改请求的URI */
     r->uri = *uri;
 
     if (args) {
@@ -2700,21 +2704,25 @@ ngx_http_internal_redirect(ngx_http_request_t *r,
     r->valid_unparsed_uri = 0;
     r->add_uri_to_alias = 0;
     r->main->count++;
-
+    /* URI已经被修改，重新执行一遍请求的11个阶段 */
     ngx_http_handler(r);
 
     return NGX_DONE;
 }
 
 
+// 从cscf->named_locations匹配到命名location
+// 然后从指定location中匹配指定handler方法，定位到location_rewrite_index阶段
+// 重新执行ngx_http_core_run_phases
 ngx_int_t
 ngx_http_named_location(ngx_http_request_t *r, ngx_str_t *name)
 {
     ngx_http_core_srv_conf_t    *cscf;
     ngx_http_core_loc_conf_t   **clcfp;
     ngx_http_core_main_conf_t   *cmcf;
-
+    /* 增加主请求的引用数，这个字段主要是在ngx_http_finalize_request调用的一些结束请求和连接的函数中使用 */
     r->main->count++;
+    /* 内部重定向，NGINX为防止请求的无限内部跳转，限定了内部重定向次数的上限为NGX_HTTP_MAX_URI_CHANGES + 1 */
     r->uri_changes--;
 
     if (r->uri_changes == 0) {
@@ -2735,7 +2743,7 @@ ngx_http_named_location(ngx_http_request_t *r, ngx_str_t *name)
     }
 
     cscf = ngx_http_get_module_srv_conf(r, ngx_http_core_module);
-
+    /* 从cscf->named_locations匹配到命名location */
     if (cscf->named_locations) {
 
         for (clcfp = cscf->named_locations; *clcfp; clcfp++) {
@@ -2764,7 +2772,7 @@ ngx_http_named_location(ngx_http_request_t *r, ngx_str_t *name)
             ngx_http_update_location_config(r);
 
             cmcf = ngx_http_get_module_main_conf(r, ngx_http_core_module);
-
+            /* 上面的流程替代了默认的 NGX_HTTP_FIND_CONFIG_PHASE 阶段 */
             r->phase_handler = cmcf->phase_engine.location_rewrite_index;
 
             r->write_event_handler = ngx_http_core_run_phases;

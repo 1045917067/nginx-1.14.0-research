@@ -90,7 +90,9 @@ ngx_regex_malloc_done(void)
     ngx_pcre_pool = NULL;
 }
 
-
+/*
+进行正则表达式匹配，传入和
+*/
 ngx_int_t
 ngx_regex_compile(ngx_regex_compile_t *rc)
 {

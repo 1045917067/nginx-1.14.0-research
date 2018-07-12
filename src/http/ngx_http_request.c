@@ -217,7 +217,7 @@ ngx_http_header_t  ngx_http_headers_in[] = {
 void
 ngx_http_init_connection(ngx_connection_t *c)
 {
-    ngx_uint_t              i;
+    ngx_ucint_t              i;
     ngx_event_t            *rev;
     struct sockaddr_in     *sin;
     ngx_http_port_t        *port;
@@ -2554,6 +2554,7 @@ ngx_http_finalize_request(ngx_http_request_t *r, ngx_int_t rc)
 
     // handler返回done，例如调用read body
     // 因为count已经增加，所以不会关闭请求
+    /*请求当次动作已经处理完成，但是该请求上还有其它进行中的异步动作。调用 ngx_http_finalize_connection 函数将请求引用计数减一。 RETURN*/
     if (rc == NGX_DONE) {
         // 检查请求相关的异步事件，尝试关闭请求
         //
@@ -2582,11 +2583,13 @@ ngx_http_finalize_request(ngx_http_request_t *r, ngx_int_t rc)
 
     // 不是done、declined，可能是ok、error、again
     // 不是done、declined，是子请求
+    /* 如果当前请求是某个原始请求的一个子请求，检查它是否有回调handler处理函数，若存在则执行 */
     if (r != r->main && r->post_subrequest) {
         rc = r->post_subrequest->handler(r, r->post_subrequest->data, rc);
     }
 
     // 返回错误，或者是http超时等错误
+    /*该请求所在的连接上发生了错误，调用 ngx_http_terminate_request 强制清理 销毁该请求。 RETURN*/
     if (rc == NGX_ERROR
         || rc == NGX_HTTP_REQUEST_TIME_OUT
         || rc == NGX_HTTP_CLIENT_CLOSED_REQUEST
@@ -2604,6 +2607,10 @@ ngx_http_finalize_request(ngx_http_request_t *r, ngx_int_t rc)
     }
 
     // 返回了300以上的http错误码
+   /* 如果 rc 值是 NGX_HTTP_CLOSE (大于 NGX_HTTP_SPECIAL_RESPONSE ），立即调 用 ngx_http_terminate_request 销毁请求；
+     * 其它情况调用函数 ngx_http_special_response_handler 重新生成此请求的响应数据。
+     * 这时需要再次 调用函数 ngx_http_finalize_request 处理 ngx_http_special_response_handler 的返回值。RETURN
+     */
     if (rc >= NGX_HTTP_SPECIAL_RESPONSE
         || rc == NGX_HTTP_CREATED
         || rc == NGX_HTTP_NO_CONTENT)
@@ -2633,10 +2640,10 @@ ngx_http_finalize_request(ngx_http_request_t *r, ngx_int_t rc)
         ngx_http_finalize_request(r, ngx_http_special_response_handler(r, rc));
         return;
     }
-
+    /*当前请求是子请求*/
     if (r != r->main) {
         clcf = ngx_http_get_module_loc_conf(r, ngx_http_core_module);
-
+        /*Nginx 认为此时该子请求已经处理完成。 置其 r->done 值为 1，随后调用函数 ngx_http_finalize_connection 将其占 用的引用计数清除。RETURN*/
         if (r->background) {
             if (!r->logged) {
                 if (clcf->log_subrequest) {
@@ -2655,7 +2662,9 @@ ngx_http_finalize_request(ngx_http_request_t *r, ngx_int_t rc)
             ngx_http_finalize_connection(r);
             return;
         }
-
+        /* 该子请求还有未处理完的数据或者子请求，并且响应数据未完全发送（ r->buffered == 1 ） 或者该子请求创建的子请求未全部完成（ r->postponed != NULL ），
+         * 使用函数 ngx_http_set_write_handler 为其注册写事件处理函数 ngx_http_writer 待有事件发生时继续处理该请求。RETURN
+         */
         if (r->buffered || r->postponed) {
 
             // 设置发送数据的handler，即写事件的回调handler为write_event_handler
@@ -2674,7 +2683,7 @@ ngx_http_finalize_request(ngx_http_request_t *r, ngx_int_t rc)
         }
 
         pr = r->parent;
-
+        /* 该子请求已经处理完毕，如果它拥有发送数据的权利，则将权利移交给父请求， */
         if (r == c->data) {
 
             r->main->count--;
@@ -2693,11 +2702,12 @@ ngx_http_finalize_request(ngx_http_request_t *r, ngx_int_t rc)
             }
 
             r->done = 1;
-
+            /* 如果该子请求不是提前完成，则从父请求的postponed链表中删除 */
             if (pr->postponed && pr->postponed->request == r) {
                 pr->postponed = pr->postponed->next;
             }
-
+            /* 将发送权利移交给父请求，父请求下次执行的时候会发送它的postponed链表中可以
+             * 发送的数据节点，或者将发送权利移交给它的下一个子请求 */
             c->data = pr;
 
         } else {
@@ -2705,14 +2715,17 @@ ngx_http_finalize_request(ngx_http_request_t *r, ngx_int_t rc)
             ngx_log_debug2(NGX_LOG_DEBUG_HTTP, c->log, 0,
                            "http finalize non-active request: \"%V?%V\"",
                            &r->uri, &r->args);
-
+            /* 到这里其实表明该子请求提前执行完成，而且它没有产生任何数据，则它下次再次获得
+               执行机会时，将会执行ngx_http_request_finalzier函数，它实际上是执行
+               ngx_http_finalzie_request（r,0），也就是什么都不干，直到轮到它发送数据时，
+               ngx_http_finalzie_request函数会将它从父请求的postponed链表中删除 */
             r->write_event_handler = ngx_http_request_finalizer;
 
             if (r->waited) {
                 r->done = 1;
             }
         }
-
+        /* 将父请求加入posted_request队尾，获得一次运行机会 */
         if (ngx_http_post_request(pr, NULL) != NGX_OK) {
             r->main->count++;
             ngx_http_terminate_request(r, 0);
@@ -2725,7 +2738,9 @@ ngx_http_finalize_request(ngx_http_request_t *r, ngx_int_t rc)
 
         return;
     }
-
+    /* 这里是处理主请求结束的逻辑，如果主请求有未发送的数据或者未处理的子请求，
+     * 则给主请求添加写事件，并设置合适的write event hander，
+     * 以便下次写事件来的时候继续处理 */
     // c->buffered，有数据在r->out里还没有发送
     // r->blocked，有线程task正在阻塞运行
     if (r->buffered || c->buffered || r->postponed) {

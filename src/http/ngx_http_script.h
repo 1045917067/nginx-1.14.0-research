@@ -15,12 +15,20 @@
 
 
 typedef struct {
-    u_char                     *ip;
-    u_char                     *pos;
-    ngx_http_variable_value_t  *sp;
+    u_char                     *ip;     //e->ip = rlcf->codes->elts
+    /*关于pos && code: 每次调用code,都会将解析到的新的字符串放入pos指向的字符串处，
+	然后将pos向后移动，下次进入的时候，会自动将数据追加到后面的。
+	对于ip也是这个原理，code里面会将e->ip向后移动。移动的大小根据不同的变量类型相关。
+	ip指向一快内存，其内容为变量相关的一个结构体，比如ngx_http_script_copy_capture_code_t，
+	结构体之后，又是下一个ip的地址。比如移动时是这样的 :
+	code = (ngx_http_script_copy_capture_code_t *) e->ip;
+    e->ip += sizeof(ngx_http_script_copy_capture_code_t);//移动这么多位移。
+	*/
+    u_char                     *pos;//pos之前的数据就是解析成功的，后面的数据将追加到pos后面。
+    ngx_http_variable_value_t  *sp;//这里貌似是用sp来保存中间结果，比如保存当前这一步的进度，到下一步好用e->sp--来找到上一步的结果。
 
-    ngx_str_t                   buf;
-    ngx_str_t                   line;
+    ngx_str_t                   buf;//存放结果，也就是buffer，pos指向其中。
+    ngx_str_t                   line;//记录请求行URI  e->line = r->uri;
 
     /* the start of the rewritten arguments */
     u_char                     *args;
@@ -32,7 +40,7 @@ typedef struct {
     unsigned                    log:1;
 
     ngx_int_t                   status;
-    ngx_http_request_t         *request;
+    ngx_http_request_t         *request;//所属的请求
 } ngx_http_script_engine_t;
 
 
