@@ -48,13 +48,17 @@ typedef void (*ngx_log_writer_pt) (ngx_log_t *log, ngx_uint_t level,
 
 
 struct ngx_log_s {
+    // 日志级别或者日志类型
     ngx_uint_t           log_level;
+    // 日志文件
     ngx_open_file_t     *file;
 
+    // 连接数
     ngx_atomic_uint_t    connection;
 
     time_t               disk_full_time;
 
+    // 回调方法，非空且error
     ngx_log_handler_pt   handler;
     void                *data;
 
@@ -69,6 +73,7 @@ struct ngx_log_s {
 
     char                *action;
 
+    // next，链表
     ngx_log_t           *next;
 };
 
