@@ -1498,7 +1498,7 @@ ngx_http_optimize_servers(ngx_conf_t *cf, ngx_http_core_main_conf_t *cmcf,
     }
 
     port = ports->elts;
-    for (p = 0; p < forfor; p++) {
+    for (p = 0; p < ports->nelts; p++) {
 
         ngx_sort(port[p].addrs.elts, (size_t) port[p].addrs.nelts,
                  sizeof(ngx_http_conf_addr_t), ngx_http_cmp_conf_addrs);

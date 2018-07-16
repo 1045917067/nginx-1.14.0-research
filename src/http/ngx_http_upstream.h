@@ -118,8 +118,22 @@ typedef struct {
 
 
 struct ngx_http_upstream_srv_conf_s {
-ngx_http_upstream_rr_peer_t};
+    ngx_http_upstream_peer_t         peer;
+    void                           **srv_conf;
 
+    ngx_array_t                     *servers;  /* ngx_http_upstream_server_t */
+
+    ngx_uint_t                       flags;
+    ngx_str_t                        host;
+    u_char                          *file_name;
+    ngx_uint_t                       line;
+    in_port_t                        port;
+    ngx_uint_t                       no_port;  /* unsigned no_port:1 */
+
+#if (NGX_HTTP_UPSTREAM_ZONE)
+    ngx_shm_zone_t                  *shm_zone;
+#endif
+};
 
 typedef struct {
     ngx_addr_t                      *addr;
