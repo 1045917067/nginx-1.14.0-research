@@ -248,6 +248,11 @@ ngx_hash_find_combined(ngx_hash_combined_t *hash, ngx_uint_t key, u_char *name,
 #define NGX_HASH_ELT_SIZE(name)                                               \
     (sizeof(void *) + ngx_align((name)->key.len + 2, sizeof(void *)))
 
+/*
+ngx_hash结构初始化
+hinit 就是ngx_hash_init_t结构，names是 ngx_hash_key_t 数组，要增加到hash中的数组。
+nelts表示这个 ngx_hash_key_t 数组的数量。这个函数的效果就是将 names和nelts决定的数组填充进入hinit的hash结构的buckets里面。
+*/
 ngx_int_t
 ngx_hash_init(ngx_hash_init_t *hinit, ngx_hash_key_t *names, ngx_uint_t nelts)
 {
@@ -265,6 +270,7 @@ ngx_hash_init(ngx_hash_init_t *hinit, ngx_hash_key_t *names, ngx_uint_t nelts)
         return NGX_ERROR;
     }
 
+    // 这里就是确认hinit设置的bucket_size能够存储name中的所有key，如果不能的话，就返回错误。
     for (n = 0; n < nelts; n++) {
         if (hinit->bucket_size < NGX_HASH_ELT_SIZE(&names[n]) + sizeof(void *))
         {
@@ -276,20 +282,37 @@ ngx_hash_init(ngx_hash_init_t *hinit, ngx_hash_key_t *names, ngx_uint_t nelts)
         }
     }
 
+    /*
+     * max_size是bucket的最大数量, 这里的test是用来做探测用的，探测的目标是在当前bucket的数量下，冲突发生的是否频繁。
+     * 过于频繁则说明当前的bucket数量过少，需要调整。那么如何判定冲突过于频繁呢？就是利用这个test数组，它总共有max_size个
+     * 元素，即最大的bucket。每个元素会累计落到该位置关键字长度，当大于256个字节，即u_short所表示的最大大小时，则判定
+     * bucket过少，引起了严重的冲突。后面会看到具体的处理。
+     */
     test = ngx_alloc(hinit->max_size * sizeof(u_short), hinit->pool->log);
     if (test == NULL) {
         return NGX_ERROR;
     }
 
+    /* 每个bucket的末尾一个null指针作为bucket的结束标志， 这里bucket_size是容纳实际数据大小，故减去一个指针大小 */
     bucket_size = hinit->bucket_size - sizeof(void *);
 
+    /*
+     * 这里考虑NGX_HASH_ELT_SIZE中，由于对齐的缘故，一个关键字最少需要占用两个指针的大小。
+     * 在这个前提下，来估计所需要的bucket最小数量，即考虑元素越小，从而一个bucket容纳的数量就越多，
+     * 自然使用的bucket的数量就越少，但最少也得有一个。
+     */
     start = nelts / (bucket_size / (2 * sizeof(void *)));
     start = start ? start : 1;
 
+    /*
+     * 调整max_size，即bucket数量的最大值，依据是：bucket超过10000，且总的bucket数量与元素个数比值小于100
+     * 那么bucket最大值减少1000，至于这几个判断值的由来，尚不清楚，经验值或者理论值。
+     */
     if (hinit->max_size > 10000 && nelts && hinit->max_size / nelts < 100) {
         start = hinit->max_size - 1000;
     }
 
+    /* 在之前确定的最小bucket个数的基础上，开始探测(通过test数组)并根据需要适当扩充，前面有分析其原理 */
     for (size = start; size <= hinit->max_size; size++) {
 
         ngx_memzero(test, size * sizeof(u_short));
@@ -316,7 +339,7 @@ ngx_hash_init(ngx_hash_init_t *hinit, ngx_hash_key_t *names, ngx_uint_t nelts)
         goto found;
 
     next:
-
+        /* 到next这里，就是实际处理bucket扩充的情况了，即递增表示bucket数量的size变量 */
         continue;
     }
 
@@ -330,11 +353,13 @@ ngx_hash_init(ngx_hash_init_t *hinit, ngx_hash_key_t *names, ngx_uint_t nelts)
                   hinit->name, hinit->bucket_size, hinit->name);
 
 found:
-
+    /* 确定了合适的bucket数量，即size。 重新初始化test数组，初始值为一个指针大小。*/
     for (i = 0; i < size; i++) {
         test[i] = sizeof(void *);
     }
-
+    /* 统计各个bucket中的关键字所占的空间，这里要提示一点，test[i]中除了基本的数据大小外，还有一个指针的大小
+     * 如上面的那个for循环所示。
+     */
     for (n = 0; n < nelts; n++) {
         if (names[n].key.data == NULL) {
             continue;
@@ -345,7 +370,7 @@ found:
     }
 
     len = 0;
-
+    /* 调整成对齐到cacheline的大小，并记录所有元素的总长度 */
     for (i = 0; i < size; i++) {
         if (test[i] == sizeof(void *)) {
             continue;
@@ -355,7 +380,10 @@ found:
 
         len += test[i];
     }
-
+    /*
+     * 申请bucket元素所占的空间，这里注意的一点就是，如果之前hash表头结构没有申请，
+     * 那么在申请时将ngx_hash_wildcard_t结构也一起申请了。
+     */
     if (hinit->hash == NULL) {
         hinit->hash = ngx_pcalloc(hinit->pool, sizeof(ngx_hash_wildcard_t)
                                              + size * sizeof(ngx_hash_elt_t *));
@@ -382,7 +410,7 @@ found:
     }
 
     elts = ngx_align_ptr(elts, ngx_cacheline_size);
-
+    /* 设置各个bucket中包含实际数据的空间的地址(或者说位置) */
     for (i = 0; i < size; i++) {
         if (test[i] == sizeof(void *)) {
             continue;
@@ -391,7 +419,7 @@ found:
         buckets[i] = (ngx_hash_elt_t *) elts;
         elts += test[i];
     }
-
+    /* 用来累计真实数据的长度，不计结尾指针的长度 */
     for (i = 0; i < size; i++) {
         test[i] = 0;
     }
@@ -411,12 +439,16 @@ found:
 
         test[key] = (u_short) (test[key] + NGX_HASH_ELT_SIZE(&names[n]));
     }
-
+    /* 设置bucket结束位置的null指针，*/
     for (i = 0; i < size; i++) {
         if (buckets[i] == NULL) {
             continue;
         }
-
+        /*
+         * 由于前面bucket的处理中多留出了一个指针的空间，而此时的test[i]是bucket中实际数据的共长度，
+         * 所以bucket[i] + test[i]正好指向了末尾null指针所在的位置。处理的时候，把它当成一个ngx_hash_elt_t结构看，
+         * 在该结构中的第一个元素，正好是一个void指针，我们只处理它，别的都不去碰，所以没有越界的问题。
+         */
         elt = (ngx_hash_elt_t *) ((u_char *) buckets[i] + test[i]);
 
         elt->value = NULL;

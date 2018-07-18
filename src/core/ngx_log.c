@@ -323,6 +323,7 @@ ngx_log_init(u_char *prefix)
     ngx_log.file = &ngx_log_file;
     ngx_log.log_level = NGX_LOG_NOTICE;
 
+    // "logs/error.log"
     name = (u_char *) NGX_ERROR_LOG_PATH;
 
     /*
@@ -404,6 +405,7 @@ ngx_int_t
 ngx_log_open_default(ngx_cycle_t *cycle)
 {
     ngx_log_t         *log;
+    // "logs/error.log"
     static ngx_str_t   error_log = ngx_string(NGX_ERROR_LOG_PATH);
 
     if (ngx_log_get_file_log(&cycle->new_log) != NULL) {
@@ -430,6 +432,7 @@ ngx_log_open_default(ngx_cycle_t *cycle)
         return NGX_ERROR;
     }
 
+    // 链表
     if (log != &cycle->new_log) {
         ngx_log_insert(&cycle->new_log, log);
     }

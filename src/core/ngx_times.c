@@ -76,7 +76,10 @@ ngx_time_init(void)
     ngx_time_update();
 }
 
-
+/*
+这个函数就是更新cache_time指向的time_t数据
+这个函数将修改struct这个非原子性操作变为指针变换这种原子性操作
+*/
 void
 ngx_time_update(void)
 {
@@ -87,6 +90,7 @@ ngx_time_update(void)
     ngx_time_t      *tp;
     struct timeval   tv;
 
+    // ngx_time_lock是一个写锁，为了不让其他进程还进行写操作
     if (!ngx_trylock(&ngx_time_lock)) {
         return;
     }
@@ -98,6 +102,7 @@ ngx_time_update(void)
 
     ngx_current_msec = ngx_monotonic_time(sec, msec);
 
+    // slot是为了原子性，默认slot设置了64个，保证指针在读取time过程中一定会读取到一个完整（即使不是当前）的请求。
     tp = &cached_time[slot];
 
     if (tp->sec == sec) {
@@ -105,7 +110,7 @@ ngx_time_update(void)
         ngx_unlock(&ngx_time_lock);
         return;
     }
-
+    // 实际上cached_time是一个环
     if (slot == NGX_TIME_SLOTS - 1) {
         slot = 0;
     } else {
@@ -179,6 +184,7 @@ ngx_time_update(void)
                        months[tm.ngx_tm_mon - 1], tm.ngx_tm_mday,
                        tm.ngx_tm_hour, tm.ngx_tm_min, tm.ngx_tm_sec);
 
+    // 这个是内存屏蔽的操作，保证后面的程序一定在前面这些程序之后执行
     ngx_memory_barrier();
 
     ngx_cached_time = tp;
@@ -188,6 +194,7 @@ ngx_time_update(void)
     ngx_cached_http_log_iso8601.data = p3;
     ngx_cached_syslog_time.data = p4;
 
+    // 释放写锁
     ngx_unlock(&ngx_time_lock);
 }
 
