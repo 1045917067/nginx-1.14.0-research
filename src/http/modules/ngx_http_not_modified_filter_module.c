@@ -51,6 +51,7 @@ ngx_module_t  ngx_http_not_modified_filter_module = {
 static ngx_http_output_header_filter_pt  ngx_http_next_header_filter;
 
 
+//304未修改头过滤器
 static ngx_int_t
 ngx_http_not_modified_header_filter(ngx_http_request_t *r)
 {
@@ -76,7 +77,7 @@ ngx_http_not_modified_header_filter(ngx_http_request_t *r)
     }
 
     if (r->headers_in.if_modified_since || r->headers_in.if_none_match) {
-
+        //如果设置的是精确匹配或者时间小于文件修改的时间则直接调用下一个filter，因为这说明文件被修改过了，需要发送新的给client
         if (r->headers_in.if_modified_since
             && ngx_http_test_if_modified(r))
         {
@@ -90,7 +91,7 @@ ngx_http_not_modified_header_filter(ngx_http_request_t *r)
         }
 
         /* not modified */
-
+        //到达这里说明文件没有被修改(在上次请求之后).然后需要发送304，因此这里设置对应的头。
         r->headers_out.status = NGX_HTTP_NOT_MODIFIED;
         r->headers_out.status_line.len = 0;
         r->headers_out.content_type.len = 0;

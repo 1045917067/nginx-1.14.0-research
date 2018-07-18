@@ -624,6 +624,7 @@ ngx_http_header_filter(ngx_http_request_t *r)
 static ngx_int_t
 ngx_http_header_filter_init(ngx_conf_t *cf)
 {
+    //全局变量
     ngx_http_top_header_filter = ngx_http_header_filter;
 
     return NGX_OK;

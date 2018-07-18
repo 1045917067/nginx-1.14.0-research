@@ -127,7 +127,7 @@ ngx_output_chain_to_iovec(ngx_iovec_t *vec, ngx_chain_t *in, size_t limit,
         if (in->buf->in_file) {
             break;
         }
-
+        /* 如果既不在内存中，又不在文件中，则返回错误 */
         if (!ngx_buf_in_memory(in->buf)) {
             ngx_log_error(NGX_LOG_ALERT, log, 0,
                           "bad buf in output chain "

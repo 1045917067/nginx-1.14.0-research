@@ -98,7 +98,7 @@ ngx_http_static_handler(ngx_http_request_t *r)
     if (ngx_http_set_disable_symlinks(r, clcf, &path, &of) != NGX_OK) {
         return NGX_HTTP_INTERNAL_SERVER_ERROR;
     }
-
+    //nginx如何读取缓存文件
     if (ngx_open_cached_file(clcf->open_file_cache, &path, &of, r->pool)
         != NGX_OK)
     {

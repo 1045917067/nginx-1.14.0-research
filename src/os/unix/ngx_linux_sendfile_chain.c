@@ -43,19 +43,20 @@ static void ngx_linux_sendfile_thread_handler(void *data, ngx_log_t *log);
 #define NGX_SENDFILE_MAXSIZE  2147483647L
 
 
+//单词发送文件上限数据2G
 ngx_chain_t *
 ngx_linux_sendfile_chain(ngx_connection_t *c, ngx_chain_t *in, off_t limit)
 {
     int            tcp_nodelay;
-    off_t          send, prev_send;
-    size_t         file_size, sent;
+    off_t          send, prev_send; //表示将要发送的buf已经已经发送的大小；prev_send 表示上次发送的大小
+    size_t         file_size, sent; //表示已经发送的buf的大小；
     ssize_t        n;
     ngx_err_t      err;
     ngx_buf_t     *file;
     ngx_event_t   *wev;
     ngx_chain_t   *cl;
-    ngx_iovec_t    header;
-    struct iovec   headers[NGX_IOVS_PREALLOCATE];
+    ngx_iovec_t    header;          //表示需要是用writev来发送的buf，也就是only in memory的buf；
+    struct iovec   headers[NGX_IOVS_PREALLOCATE];   //这个主要是用于sendfile和writev的参数，这里注意上面header数组保存的就是iovec。
 
     wev = c->write;
 
@@ -65,7 +66,7 @@ ngx_linux_sendfile_chain(ngx_connection_t *c, ngx_chain_t *in, off_t limit)
 
 
     /* the maximum limit size is 2G-1 - the page size */
-
+    // 单次最大字节发送量
     if (limit == 0 || limit > (off_t) (NGX_SENDFILE_MAXSIZE - ngx_pagesize)) {
         limit = NGX_SENDFILE_MAXSIZE - ngx_pagesize;
     }
@@ -73,6 +74,7 @@ ngx_linux_sendfile_chain(ngx_connection_t *c, ngx_chain_t *in, off_t limit)
 
     send = 0;
 
+    /* 设置header，也就是in memory的数组 */
     header.iovs = headers;
     header.nalloc = NGX_IOVS_PREALLOCATE;
 
@@ -80,7 +82,8 @@ ngx_linux_sendfile_chain(ngx_connection_t *c, ngx_chain_t *in, off_t limit)
         prev_send = send;
 
         /* create the iovec and coalesce the neighbouring bufs */
-
+        // 处理in memory的部分，然后将buf放入对应的iovec数组，处理核心思想就是合并内存连续并相邻的buf
+        // (不管是in memory还是in file)：
         cl = ngx_output_chain_to_iovec(&header, in, limit - send, c->log);
 
         if (cl == NGX_CHAIN_ERROR) {
@@ -97,11 +100,11 @@ ngx_linux_sendfile_chain(ngx_connection_t *c, ngx_chain_t *in, off_t limit)
             && cl->buf->in_file)
         {
             /* the TCP_CORK and TCP_NODELAY are mutually exclusive */
-
+            // 无延迟
             if (c->tcp_nodelay == NGX_TCP_NODELAY_SET) {
 
                 tcp_nodelay = 0;
-
+                //禁用nagle算法 40ms
                 if (setsockopt(c->fd, IPPROTO_TCP, TCP_NODELAY,
                                (const void *) &tcp_nodelay, sizeof(int)) == -1)
                 {
@@ -112,7 +115,6 @@ ngx_linux_sendfile_chain(ngx_connection_t *c, ngx_chain_t *in, off_t limit)
                      * we continue a processing with the TCP_NODELAY
                      * and without the TCP_CORK
                      */
-
                     if (err != NGX_EINTR) {
                         wev->error = 1;
                         ngx_connection_error(c, err,
@@ -128,6 +130,7 @@ ngx_linux_sendfile_chain(ngx_connection_t *c, ngx_chain_t *in, off_t limit)
                 }
             }
 
+            //未设置nage算法时，自动调用 nopush??
             if (c->tcp_nodelay == NGX_TCP_NODELAY_UNSET) {
 
                 if (ngx_tcp_nopush(c->fd) == -1) {
@@ -155,12 +158,12 @@ ngx_linux_sendfile_chain(ngx_connection_t *c, ngx_chain_t *in, off_t limit)
         }
 
         /* get the file buf */
-
+        //文件发送零拷贝
         if (header.count == 0 && cl && cl->buf->in_file && send < limit) {
             file = cl->buf;
 
             /* coalesce the neighbouring file bufs */
-
+            //合并相邻文件bufs
             file_size = (size_t) ngx_chain_coalesce_file(&cl, limit - send);
 
             send += file_size;
@@ -185,6 +188,7 @@ ngx_linux_sendfile_chain(ngx_connection_t *c, ngx_chain_t *in, off_t limit)
             sent = (n == NGX_AGAIN) ? 0 : n;
 
         } else {
+            //普通发送
             n = ngx_writev(c, &header);
 
             if (n == NGX_ERROR) {
@@ -219,6 +223,7 @@ ngx_linux_sendfile_chain(ngx_connection_t *c, ngx_chain_t *in, off_t limit)
             continue;
         }
 
+        /*发送完毕*/
         if (send >= limit || in == NULL) {
             return in;
         }

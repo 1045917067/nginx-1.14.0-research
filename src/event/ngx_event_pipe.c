@@ -19,13 +19,15 @@ static ngx_inline void ngx_event_pipe_remove_shadow_links(ngx_buf_t *buf);
 static ngx_int_t ngx_event_pipe_drain_chains(ngx_event_pipe_t *p);
 
 
+//ngx_event_pipe函数主体就是一个循环，循环读取upstream的数据，然后发送到客户端去。
+//分别调用ngx_event_pipe_read_upstream和ngx_event_pipe_write_to_downstream，从函数名就可以看出来
 ngx_int_t
 ngx_event_pipe(ngx_event_pipe_t *p, ngx_int_t do_write)
 {
     ngx_int_t     rc;
     ngx_uint_t    flags;
     ngx_event_t  *rev, *wev;
-
+    //这个for循环是不断的用ngx_event_pipe_read_upstream读取客户端数据，然后调用ngx_event_pipe_write_to_downstream
     for ( ;; ) {
         if (do_write) {
             p->log->action = "sending to client";
@@ -45,7 +47,7 @@ ngx_event_pipe(ngx_event_pipe_t *p, ngx_int_t do_write)
         p->upstream_blocked = 0;
 
         p->log->action = "reading upstream";
-
+        //从upstream读取数据到chain的链表里面，然后整块整块的调用input_filter进行协议的解析，并将HTTP结果存放在p->in，p->last_in的链表里面。
         if (ngx_event_pipe_read_upstream(p) == NGX_ABORT) {
             return NGX_ABORT;
         }
@@ -98,6 +100,11 @@ ngx_event_pipe(ngx_event_pipe_t *p, ngx_int_t do_write)
 }
 
 
+//0.从preread_bufs，free_raw_bufs或者ngx_create_temp_buf寻找一块空闲的或部分空闲的内存；
+//1.调用p->upstream->recv_chain==ngx_readv_chain，用writev的方式读取FCGI的数据,填充chain。
+//2.对于整块buf都满了的chain节点调用input_filter(ngx_http_fastcgi_input_filter)进行upstream协议解析，比如FCGI协议，解析后的结果放入p->in里面；
+//3.对于没有填充满的buffer节点，放入free_raw_bufs以待下次进入时从后面进行追加。
+//4.当然了，如果对端发送完数据FIN了，那就直接调用input_filter处理free_raw_bufs这块数据
 static ngx_int_t
 ngx_event_pipe_read_upstream(ngx_event_pipe_t *p)
 {

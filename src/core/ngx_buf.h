@@ -101,6 +101,7 @@ typedef void (*ngx_output_chain_aio_pt)(ngx_output_chain_ctx_t *ctx,
     ngx_file_t *file);
 
 
+//copy filter的主要逻辑的处理都放在ngx_output_chain模块中
 struct ngx_output_chain_ctx_s {
     ngx_buf_t                   *buf;   //保存临时的buf
     ngx_chain_t                 *in;    //保存了将要发送的chain
@@ -129,7 +130,7 @@ struct ngx_output_chain_ctx_s {
 
     off_t                        alignment;
 
-    ngx_pool_t                  *pool;  //缓存池
+    ngx_pool_t                  *pool;      //缓存池
     ngx_int_t                    allocated; //已经allocated的大小
     ngx_bufs_t                   bufs;      //对应的bufs的大小，这个值就是我们loc conf中设置的bufs
     ngx_buf_tag_t                tag;       //表示现在处于那个模块（因为upstream也会调用output_chain)

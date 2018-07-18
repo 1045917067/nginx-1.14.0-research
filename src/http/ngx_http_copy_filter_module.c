@@ -83,6 +83,7 @@ ngx_module_t  ngx_http_copy_filter_module = {
 static ngx_http_output_body_filter_pt    ngx_http_next_body_filter;
 
 
+//这个filter模块主要是来将一些需要复制的buf（可能在文件中，也可能在内存中）重新复制一份交给后面的filter模块处理
 static ngx_int_t
 ngx_http_copy_filter(ngx_http_request_t *r, ngx_chain_t *in)
 {
@@ -97,8 +98,10 @@ ngx_http_copy_filter(ngx_http_request_t *r, ngx_chain_t *in)
     ngx_log_debug2(NGX_LOG_DEBUG_HTTP, c->log, 0,
                    "http copy filter: \"%V?%V\"", &r->uri, &r->args);
 
+    /* 获取ctx */
     ctx = ngx_http_get_module_ctx(r, ngx_http_copy_filter_module);
 
+    /* 如果为空，则说明需要初始化ctx */
     if (ctx == NULL) {
         ctx = ngx_pcalloc(r->pool, sizeof(ngx_output_chain_ctx_t));
         if (ctx == NULL) {
@@ -110,19 +113,23 @@ ngx_http_copy_filter(ngx_http_request_t *r, ngx_chain_t *in)
         conf = ngx_http_get_module_loc_conf(r, ngx_http_copy_filter_module);
         clcf = ngx_http_get_module_loc_conf(r, ngx_http_core_module);
 
+        /* 设置sendfile */
         ctx->sendfile = c->sendfile;
+        /* 如果request设置了filter_need_in_memory的话，ctx的这个域就会被设置 */
         ctx->need_in_memory = r->main_filter_need_in_memory
                               || r->filter_need_in_memory;
+        /* 和上面类似 */
         ctx->need_in_temp = r->filter_need_temporary;
 
         ctx->alignment = clcf->directio_alignment;
 
         ctx->pool = r->pool;
-        ctx->bufs = conf->bufs;
+        ctx->bufs = conf->bufs;     //设置nginx获取几个单位的缓存空间，用于存放要向客户端发送的数据。此设置为：按照原始数据大小以32K为单位的4倍大小申请内存空间。
         ctx->tag = (ngx_buf_tag_t) &ngx_http_copy_filter_module;
-
+        /* 可以看到output_filter就是下一个body filter节点 */
         ctx->output_filter = (ngx_output_chain_filter_pt)
                                   ngx_http_next_body_filter;
+        /* 此时filter ctx为当前的请求 */
         ctx->filter_ctx = r;
 
 #if (NGX_HAVE_FILE_AIO)
@@ -148,7 +155,7 @@ ngx_http_copy_filter(ngx_http_request_t *r, ngx_chain_t *in)
 #if (NGX_HAVE_FILE_AIO || NGX_THREADS)
     ctx->aio = r->aio;
 #endif
-
+    /* 最关键的函数，下面会详细分析 */
     rc = ngx_output_chain(ctx, in);
 
     if (ctx->in == NULL) {
