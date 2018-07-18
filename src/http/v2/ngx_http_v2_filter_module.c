@@ -18,6 +18,10 @@
  * and estimate number for the rest, but not smaller than required.
  */
 
+/*
+ 这里的ngx_http_v2_integer_octets ngx_http_v2_integer_octets index索引编码过程和ngx_http_v2_state_header_block中的解码过程对应
+ ngx_http_v2_integer_octets ngx_http_v2_indexed进行整数编码，ngx_http_v2_literal_size进行字符串编码
+*/
 #define ngx_http_v2_integer_octets(v)  (1 + (v) / 127)
 
 #define ngx_http_v2_literal_size(h)                                           \
@@ -129,7 +133,11 @@ ngx_module_t  ngx_http_v2_filter_module = {
 
 static ngx_http_output_header_filter_pt  ngx_http_next_header_filter;
 
-
+/*
+ NGINX在ngx_http_v2_state_header_block对接收到的头部帧进行解码解包，在ngx_http_v2_header_filter中对头部帧进行编码组包
+ NGINX接收客户端的header帧在函数ngx_http_v2_header_filter，发送响应的header帧在函数ngx_http_v2_header_filter
+ 接收完后端响应的头部信息后，解析成功后发送这些头部信息到客户端，需要走该header filter模块
+*/
 static ngx_int_t
 ngx_http_v2_header_filter(ngx_http_request_t *r)
 {
@@ -163,6 +171,7 @@ ngx_http_v2_header_filter(ngx_http_request_t *r)
 
     stream = r->stream;
 
+    // 如果没有创建对应的stream，则直接跳到下一个filter
     if (!stream) {
         return ngx_http_next_header_filter(r);
     }
@@ -255,6 +264,11 @@ ngx_http_v2_header_filter(ngx_http_request_t *r)
 
     len = h2c->table_update ? 1 : 0;
 
+    /*
+     NGINX在ngx_http_v2_state_header_block对接收到的头部帧进行解码解包，在ngx_http_v2_header_filter中对头部帧进行编码组包
+     静态映射表在ngx_http_v2_static_table
+     头部9字节 + status响应长度(1字节为什么可以表示status响应码，因为一个字节就可以表示静态表的那个成员,见ngx_http_v2_static_table)
+    */
     len += status ? 1 : 1 + ngx_http_v2_literal_size("418");
 
     clcf = ngx_http_get_module_loc_conf(r, ngx_http_core_module);

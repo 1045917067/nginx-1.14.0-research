@@ -16,7 +16,10 @@
 static ngx_int_t ngx_http_v2_table_account(ngx_http_v2_connection_t *h2c,
     size_t size);
 
-
+/*
+ header帧内容部分，可以通过1字节来获取到对应的name:value，例如客户端发送过来的一字节编码转换后为2，则对应method:POST头部行
+ HPACK 使用2个索引表(静态索引表和动态索引表)来把头部映射到索引值,这里的ngx_http_v2_static_table是静态索引表
+*/
 static ngx_http_v2_header_t  ngx_http_v2_static_table[] = {
     { ngx_string(":authority"), ngx_string("") },
     { ngx_string(":method"), ngx_string("GET") },
@@ -81,6 +84,11 @@ static ngx_http_v2_header_t  ngx_http_v2_static_table[] = {
     { ngx_string("www-authenticate"), ngx_string("") },
 };
 
+/*
+ 静态表的大小现在是固定的61， 因此静态表就是从1到61的索引，然后动态表从新到旧，依次从62开始递增。
+ 这样就共同的组成了一个索引空间，且互不冲突。
+ ngx_http_v2_static_table静态表成员数
+*/
 #define NGX_HTTP_V2_STATIC_TABLE_ENTRIES                                      \
     (sizeof(ngx_http_v2_static_table)                                         \
      / sizeof(ngx_http_v2_header_t))
@@ -100,6 +108,10 @@ ngx_http_v2_get_static_value(ngx_uint_t index)
 }
 
 
+/*
+ 根据index索引从静态表或者动态表中获取name:value存入到h2c->state.header，第一次发送name:value过来，第二次
+ 就可以直接发送之前name:value对应的索引过来就可以定位到对应的name:value，从而节约网络资源
+*/
 ngx_int_t
 ngx_http_v2_get_indexed_header(ngx_http_v2_connection_t *h2c, ngx_uint_t index,
     ngx_uint_t name_only)
@@ -114,12 +126,15 @@ ngx_http_v2_get_indexed_header(ngx_http_v2_connection_t *h2c, ngx_uint_t index,
         return NGX_ERROR;
     }
 
+    // 注意这里打印如果是7，表示从1开始，实际上是对应数字ngx_http_v2_static_table[6]
     ngx_log_debug2(NGX_LOG_DEBUG_HTTP, h2c->connection->log, 0,
                    "http2 get indexed %s: %ui",
                    name_only ? "name" : "header", index);
 
+    // --是因为数组从0开始的
     index--;
 
+    // 说明压缩的头部行是静态索引表中头部行信息
     if (index < NGX_HTTP_V2_STATIC_TABLE_ENTRIES) {
         h2c->state.header = ngx_http_v2_static_table[index];
         return NGX_OK;
@@ -127,10 +142,19 @@ ngx_http_v2_get_indexed_header(ngx_http_v2_connection_t *h2c, ngx_uint_t index,
 
     index -= NGX_HTTP_V2_STATIC_TABLE_ENTRIES;
 
+    /*
+     说明该压缩的头部行在动态索引表中，在动态索引表范围内
+     把从动态表中查找的name:value赋值给h2c->state.header
+    */
     if (index < h2c->hpack.added - h2c->hpack.deleted) {
+        /*
+         说明之前以及发送过某name:value，这次发送了对应的索引值过来，通过该索引就可以直接定位到之前发送的name:value信息，
+         这样就可以减少头部报文的长度，节省带宽
+        */
         index = (h2c->hpack.added - index - 1) % h2c->hpack.allocated;
         entry = h2c->hpack.entries[index];
 
+        // 开辟存储name的空间
         p = ngx_pnalloc(h2c->state.pool, entry->name.len + 1);
         if (p == NULL) {
             return NGX_ERROR;
@@ -141,6 +165,7 @@ ngx_http_v2_get_indexed_header(ngx_http_v2_connection_t *h2c, ngx_uint_t index,
 
         rest = h2c->hpack.storage + NGX_HTTP_V2_TABLE_SIZE - entry->name.data;
 
+        // 拷贝索引表中name内容
         if (entry->name.len > rest) {
             p = ngx_cpymem(p, entry->name.data, rest);
             p = ngx_cpymem(p, h2c->hpack.storage, entry->name.len - rest);
@@ -155,6 +180,7 @@ ngx_http_v2_get_indexed_header(ngx_http_v2_connection_t *h2c, ngx_uint_t index,
             return NGX_OK;
         }
 
+        // 开辟存储value的空间
         p = ngx_pnalloc(h2c->state.pool, entry->value.len + 1);
         if (p == NULL) {
             return NGX_ERROR;
@@ -165,6 +191,7 @@ ngx_http_v2_get_indexed_header(ngx_http_v2_connection_t *h2c, ngx_uint_t index,
 
         rest = h2c->hpack.storage + NGX_HTTP_V2_TABLE_SIZE - entry->value.data;
 
+        // 拷贝索引表中value内容
         if (entry->value.len > rest) {
             p = ngx_cpymem(p, entry->value.data, rest);
             p = ngx_cpymem(p, h2c->hpack.storage, entry->value.len - rest);
@@ -184,7 +211,11 @@ ngx_http_v2_get_indexed_header(ngx_http_v2_connection_t *h2c, ngx_uint_t index,
     return NGX_ERROR;
 }
 
-
+/*
+ 把header对应的name:value添加到entries[]指向的映射表中，这里的header可能是静态表，也可能是动态表，所以entries指向的
+ 映射表中可能同时包含静态表和动态表
+ 把name:value加入到h2c->hpack.entries[]指向的空间
+*/
 ngx_int_t
 ngx_http_v2_add_header(ngx_http_v2_connection_t *h2c,
     ngx_http_v2_header_t *header)
@@ -218,6 +249,7 @@ ngx_http_v2_add_header(ngx_http_v2_connection_t *h2c,
         h2c->hpack.pos = h2c->hpack.storage;
     }
 
+    // 计算可用空间，不够则占用最旧的name:value空间
     if (ngx_http_v2_table_account(h2c, header->name.len + header->value.len)
         != NGX_OK)
     {
@@ -234,15 +266,19 @@ ngx_http_v2_add_header(ngx_http_v2_connection_t *h2c,
         entry = h2c->hpack.entries[h2c->hpack.reused++ % h2c->hpack.allocated];
     }
 
+    // storage中可用的有效空间
     avail = h2c->hpack.storage + NGX_HTTP_V2_TABLE_SIZE - h2c->hpack.pos;
 
     entry->name.len = header->name.len;
     entry->name.data = h2c->hpack.pos;
 
+    // 拷贝name到storage空间
     if (avail >= header->name.len) {
+        // storage中有效可用空间充足，拷贝name到storage空间
         h2c->hpack.pos = ngx_cpymem(h2c->hpack.pos, header->name.data,
                                     header->name.len);
     } else {
+        // storage空间不够了，则重头覆盖
         ngx_memcpy(h2c->hpack.pos, header->name.data, avail);
         h2c->hpack.pos = ngx_cpymem(h2c->hpack.storage,
                                     header->name.data + avail,
@@ -255,6 +291,7 @@ ngx_http_v2_add_header(ngx_http_v2_connection_t *h2c,
     entry->value.len = header->value.len;
     entry->value.data = h2c->hpack.pos;
 
+    // 拷贝value到storage空间
     if (avail >= header->value.len) {
         h2c->hpack.pos = ngx_cpymem(h2c->hpack.pos, header->value.data,
                                     header->value.len);
@@ -293,24 +330,28 @@ ngx_http_v2_add_header(ngx_http_v2_connection_t *h2c,
         h2c->hpack.allocated += 64;
     }
 
+    // entries[i]指针直接指向某个entry，通过该entry就可以直接定位到该name:value在storage中的存储位置
     h2c->hpack.entries[h2c->hpack.added++ % h2c->hpack.allocated] = entry;
 
     return NGX_OK;
 }
 
-
+// 保证新加入的size字节可以存入到storage中，如果storage空间不够，则清除掉最老的name:value
 static ngx_int_t
 ngx_http_v2_table_account(ngx_http_v2_connection_t *h2c, size_t size)
 {
     ngx_http_v2_header_t  *entry;
 
+    // +32字节??????
     size += 32;
 
     ngx_log_debug2(NGX_LOG_DEBUG_HTTP, h2c->connection->log, 0,
                    "http2 table account: %uz free:%uz",
                    size, h2c->hpack.free);
 
+    // free空间充足，可以存下size
     if (size <= h2c->hpack.free) {
+        // 因为又要放size字节到storage中，因此需要做减法
         h2c->hpack.free -= size;
         return NGX_OK;
     }
@@ -321,11 +362,13 @@ ngx_http_v2_table_account(ngx_http_v2_connection_t *h2c, size_t size)
         return NGX_DECLINED;
     }
 
+    // storage中空间不够，则清除其中保存的部分name:value，并记录到deleted中，可以看出deleted是清除的storage中最老的name:value
     do {
         entry = h2c->hpack.entries[h2c->hpack.deleted++ % h2c->hpack.allocated];
         h2c->hpack.free += 32 + entry->name.len + entry->value.len;
     } while (size > h2c->hpack.free);
 
+    // 因为又要放size字节到storage中，因此需要做减法
     h2c->hpack.free -= size;
 
     return NGX_OK;
@@ -338,6 +381,7 @@ ngx_http_v2_table_size(ngx_http_v2_connection_t *h2c, size_t size)
     ssize_t                needed;
     ngx_http_v2_header_t  *entry;
 
+    // 动态表长度调整不能超过该值
     if (size > NGX_HTTP_V2_TABLE_SIZE) {
         ngx_log_error(NGX_LOG_INFO, h2c->connection->log, 0,
                       "client sent invalid table size update: %uz", size);
@@ -351,6 +395,7 @@ ngx_http_v2_table_size(ngx_http_v2_connection_t *h2c, size_t size)
 
     needed = h2c->hpack.size - size;
 
+    // storage中空间不够，则清除其中保存的部分name:value，并记录到deleted中，可以看出deleted是清除的storage中最老的name:value
     while (needed > (ssize_t) h2c->hpack.free) {
         entry = h2c->hpack.entries[h2c->hpack.deleted++ % h2c->hpack.allocated];
         h2c->hpack.free += 32 + entry->name.len + entry->value.len;
