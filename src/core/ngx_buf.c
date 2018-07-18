@@ -299,6 +299,7 @@ ngx_chain_update_sent(ngx_chain_t *in, off_t sent)
 {
     off_t  size;
 
+    /* 开始重新遍历chain，这里是为了防止没有发送完全的情况，此时我们就需要切割buf了 */
     for ( /* void */ ; in; in = in->next) {
 
         if (ngx_buf_special(in->buf)) {
@@ -309,22 +310,23 @@ ngx_chain_update_sent(ngx_chain_t *in, off_t sent)
             break;
         }
 
+        /* 得到buf size */
         size = ngx_buf_size(in->buf);
-
+        /* 如果大于当前的size，则说明这个buf的数据已经被完全发送完毕了，因此更新它的域 */
         if (sent >= size) {
             sent -= size;
-
+            /* 如果在内存则更新pos */
             if (ngx_buf_in_memory(in->buf)) {
                 in->buf->pos = in->buf->last;
             }
-
+            /* 如果在file中则更显file_pos */
             if (in->buf->in_file) {
                 in->buf->file_pos = in->buf->file_last;
             }
 
             continue;
         }
-
+        /* 到这里说明当前的buf只有一部分被发送出去了，因此只需要修改指针。以便于下次发送 */
         if (ngx_buf_in_memory(in->buf)) {
             in->buf->pos += (size_t) sent;
         }

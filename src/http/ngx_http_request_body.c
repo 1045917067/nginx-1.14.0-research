@@ -71,7 +71,7 @@ ngx_http_read_client_request_body(ngx_http_request_t *r,
     rb->post_handler = post_handler;
 
     r->request_body = rb;
-
+    //没有body体
     if (r->headers_in.content_length_n < 0 && !r->headers_in.chunked) {
         r->request_body_no_buffering = 0;
         post_handler(r);
@@ -84,7 +84,7 @@ ngx_http_read_client_request_body(ngx_http_request_t *r,
         goto done;
     }
 #endif
-
+    //有body体
     preread = r->header_in->last - r->header_in->pos;
 
     if (preread) {
@@ -127,7 +127,7 @@ ngx_http_read_client_request_body(ngx_http_request_t *r,
 
             r->read_event_handler = ngx_http_read_client_request_body_handler;
             r->write_event_handler = ngx_http_request_empty_handler;
-
+            //采用readv的方式读取客户端发送过来的BODY
             rc = ngx_http_do_read_client_request_body(r);
             goto done;
         }
@@ -157,8 +157,8 @@ ngx_http_read_client_request_body(ngx_http_request_t *r,
 
     clcf = ngx_http_get_module_loc_conf(r, ngx_http_core_module);
 
-    size = clcf->client_body_buffer_size;
-    size += size >> 2;
+    size = clcf->client_body_buffer_size;   //配置的最大缓冲区大小
+    size += size >> 2;  //设置大小为size + 1/4*size,剩余的内容不超过缓冲区大小的1.25倍，一次读完（1.25可能是经验值吧），否则，按缓冲区大小读取。
 
     /* TODO: honor r->request_body_in_single_buf */
 

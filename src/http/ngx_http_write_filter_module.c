@@ -67,7 +67,7 @@ ngx_http_write_filter(ngx_http_request_t *r, ngx_chain_t *in)
     ll = &r->out;
 
     /* find the size, the flush point and the last link of the saved chain */
-
+    //找到保存链的大小，刷新点和最后一个链接
     for (cl = r->out; cl; cl = cl->next) {
         ll = &cl->next;
 
@@ -116,7 +116,7 @@ ngx_http_write_filter(ngx_http_request_t *r, ngx_chain_t *in)
     }
 
     /* add the new chain to the existent one */
-
+    //将新链添加到现有链
     for (ln = in; ln; ln = ln->next) {
         cl = ngx_alloc_chain_link(r->pool);
         if (cl == NULL) {
@@ -183,20 +183,28 @@ ngx_http_write_filter(ngx_http_request_t *r, ngx_chain_t *in)
      * there are the incoming bufs and the size of all bufs
      * is smaller than "postpone_output" directive
      */
-
+    // 不是最后一个buf, 没有刷新点，不能输出
+    // 所有传入的bufs的 小于 postpone_output 指令设置大小时，不能输出的
+    // 当nginx向客户端发送的数据达到 1460 bytes 字节的时候，才向客户端发送数据，提高效率
     if (!last && !flush && in && size < (off_t) clcf->postpone_output) {
         return NGX_OK;
     }
 
+    /* 如果请求由于被限速而必须延迟发送时，设置一个标识后退出 */
+    // 猜测delayed 主要是限速设置的
+    // ngx_http_static_handler 时为 0
+    // ngx_http_upstream_handler 时为 0
     if (c->write->delayed) {
         c->buffered |= NGX_HTTP_WRITE_BUFFERED;
         return NGX_AGAIN;
     }
-
+    /* 如果buffer总大小为0，而且当前连接之前没有由于底层发送接口的原因延迟，则检查是否有特殊标记 */
     if (size == 0
         && !(c->buffered & NGX_LOWLEVEL_BUFFERED)
         && !(last && c->need_last_buf))
     {
+        /* last_buf标记，表示请求体已经发送结束 */
+        /* flush生效，而且又没有实际数据，则清空当前的未发送队列 */
         if (last || flush || sync) {
             for (cl = r->out; cl; /* void */) {
                 ln = cl;
@@ -217,7 +225,7 @@ ngx_http_write_filter(ngx_http_request_t *r, ngx_chain_t *in)
 
         return NGX_ERROR;
     }
-
+    /*　请求有速率限制，则计算当前可以发送的大小 */
     if (r->limit_rate) {
         if (r->limit_rate_after == 0) {
             r->limit_rate_after = clcf->limit_rate_after;
@@ -243,7 +251,7 @@ ngx_http_write_filter(ngx_http_request_t *r, ngx_chain_t *in)
         }
 
     } else {
-        limit = clcf->sendfile_max_chunk;
+        limit = clcf->sendfile_max_chunk;   //默认为0
     }
 
     sent = c->sent;
@@ -251,6 +259,8 @@ ngx_http_write_filter(ngx_http_request_t *r, ngx_chain_t *in)
     ngx_log_debug1(NGX_LOG_DEBUG_HTTP, c->log, 0,
                    "http write filter limit %O", limit);
 
+    /* 发送数据 */
+    //ngx_linux_sendfile_chain
     chain = c->send_chain(c, r->out, limit);
 
     ngx_log_debug1(NGX_LOG_DEBUG_HTTP, c->log, 0,
@@ -260,7 +270,7 @@ ngx_http_write_filter(ngx_http_request_t *r, ngx_chain_t *in)
         c->error = 1;
         return NGX_ERROR;
     }
-
+    /* 更新限速相关的信息 */
     if (r->limit_rate) {
 
         nsent = c->sent;
@@ -294,7 +304,7 @@ ngx_http_write_filter(ngx_http_request_t *r, ngx_chain_t *in)
         c->write->delayed = 1;
         ngx_add_timer(c->write, 1);
     }
-
+    /* 更新输出链，释放已经发送的节点 */
     for (cl = r->out; cl && cl != chain; /* void */) {
         ln = cl;
         cl = cl->next;
@@ -302,14 +312,14 @@ ngx_http_write_filter(ngx_http_request_t *r, ngx_chain_t *in)
     }
 
     r->out = chain;
-
+    /* 如果数据未发送完毕，则设置一个标记 */
     if (chain) {
         c->buffered |= NGX_HTTP_WRITE_BUFFERED;
         return NGX_AGAIN;
     }
 
     c->buffered &= ~NGX_HTTP_WRITE_BUFFERED;
-
+    /* 如果由于底层发送接口导致数据未发送完全，且当前请求没有其他数据需要发送，此时要返回NGX_AGAIN，表示还有数据未发送 */
     if ((c->buffered & NGX_LOWLEVEL_BUFFERED) && r->postponed == NULL) {
         return NGX_AGAIN;
     }

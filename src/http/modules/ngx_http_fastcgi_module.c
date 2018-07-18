@@ -2084,7 +2084,7 @@ ngx_http_fastcgi_input_filter_init(void *data)
     return NGX_OK;
 }
 
-
+//协议解析会调用FCGI协议
 static ngx_int_t
 ngx_http_fastcgi_input_filter(ngx_event_pipe_t *p, ngx_buf_t *buf)
 {

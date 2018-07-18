@@ -44,6 +44,7 @@
  * "--0123456789--" CRLF
  */
 
+//Nginx断点续传-Range模块
 
 typedef struct {
     off_t        start;

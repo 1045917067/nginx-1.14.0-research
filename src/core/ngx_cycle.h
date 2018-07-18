@@ -26,13 +26,16 @@ typedef struct ngx_shm_zone_s  ngx_shm_zone_t;
 
 typedef ngx_int_t (*ngx_shm_zone_init_pt) (ngx_shm_zone_t *zone, void *data);
 
+/*
+共享内存结构
+*/
 struct ngx_shm_zone_s {
-    void                     *data;
-    ngx_shm_t                 shm;
-    ngx_shm_zone_init_pt      init;
-    void                     *tag;
+    void                     *data; // 并不是具体的数据，而是成功回调方法的上下文
+    ngx_shm_t                 shm; // 具体的共享内存数据结构，这才是真正保存指向共享内存区指针的对象
+    ngx_shm_zone_init_pt      init; // 初始化回调方法
+    void                     *tag;  // 标签，一般指向模块，表示这个共享内存是什么模块创建的
     void                     *sync;
-    ngx_uint_t                noreuse;  /* unsigned  noreuse:1; */
+    ngx_uint_t                noreuse;  // 是否禁止复用，默认允许复用
 };
 
 // 全局变量

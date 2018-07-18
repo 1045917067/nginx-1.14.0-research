@@ -1965,6 +1965,7 @@ ngx_http_upstream_reinit(ngx_http_request_t *r, ngx_http_upstream_t *u)
 }
 
 
+//调用输出的过滤器，发送数据到后端
 static void
 ngx_http_upstream_send_request(ngx_http_request_t *r, ngx_http_upstream_t *u,
     ngx_uint_t do_write)
@@ -1972,7 +1973,7 @@ ngx_http_upstream_send_request(ngx_http_request_t *r, ngx_http_upstream_t *u,
     ngx_int_t          rc;
     ngx_connection_t  *c;
 
-    c = u->peer.connection;
+    c = u->peer.connection; //拿到这个peer的连接
 
     ngx_log_debug0(NGX_LOG_DEBUG_HTTP, c->log, 0,
                    "http upstream send request");
@@ -1980,14 +1981,16 @@ ngx_http_upstream_send_request(ngx_http_request_t *r, ngx_http_upstream_t *u,
     if (u->state->connect_time == (ngx_msec_t) -1) {
         u->state->connect_time = ngx_current_msec - u->state->response_time;
     }
-
+    //测试一个连接状态，如果连接损坏，则重试
     if (!u->request_sent && ngx_http_upstream_test_connect(c) != NGX_OK) {
         ngx_http_upstream_next(r, u, NGX_HTTP_UPSTREAM_FT_ERROR);
         return;
     }
 
     c->log->action = "sending request to upstream";
-
+    //下面开始过滤模块的过程。对请求的FCGI数据进行过滤，里面会调用ngx_chain_writer，将数据用writev发送出去
+    //ngx_http_proxy_create_request将客户端发送的数据拷贝到这里，如果是从读写事件回调进入的，则这里的request_sent应该为1，
+    //表示数据已经拷贝到输出链了。这份数据是在ngx_http_upstream_init_request里面调用处理模块比如FCGI的create_request处理的，解析为FCGI的结构数据。
     rc = ngx_http_upstream_send_request_body(r, u, do_write);
 
     if (rc == NGX_ERROR) {
@@ -2000,7 +2003,7 @@ ngx_http_upstream_send_request(ngx_http_request_t *r, ngx_http_upstream_t *u,
         return;
     }
 
-    if (rc == NGX_AGAIN) {
+    if (rc == NGX_AGAIN) {  //数据还没有发送完毕，待会还需要发送
         if (!c->write->ready || u->request_body_blocked) {
             ngx_add_timer(c->write, u->conf->send_timeout);
 
@@ -2024,7 +2027,7 @@ ngx_http_upstream_send_request(ngx_http_request_t *r, ngx_http_upstream_t *u,
     }
 
     if (c->tcp_nopush == NGX_TCP_NOPUSH_SET) {
-        if (ngx_tcp_push(c->fd) == -1) {
+        if (ngx_tcp_push(c->fd) == -1) {    //设置PUSH标志位，尽快发送数据。
             ngx_log_error(NGX_LOG_CRIT, c->log, ngx_socket_errno,
                           ngx_tcp_push_n " failed");
             ngx_http_upstream_finalize_request(r, u,
@@ -2052,7 +2055,7 @@ ngx_http_upstream_send_request(ngx_http_request_t *r, ngx_http_upstream_t *u,
             return;
         }
 
-        ngx_add_timer(c->read, u->conf->read_timeout);
+        ngx_add_timer(c->read, u->conf->read_timeout);      //这回数据已经发送了，可以准备接收了，设置接收超时定时器。
 
         if (c->read->ready) {
             ngx_http_upstream_process_header(r, u);
@@ -2313,7 +2316,7 @@ ngx_http_upstream_process_header(ngx_http_request_t *r, ngx_http_upstream_t *u)
     }
 
     for ( ;; ) {
-        ////不断调recv读取数据，如果没有了，就先返回
+        //不断调recv读取数据，如果没有了，就先返回
         //循环调用ngx_unix_recv函数,读取PHP发送的数据存放在u->buffer.last
         n = c->recv(c, u->buffer.last, u->buffer.end - u->buffer.last);
 
@@ -2933,7 +2936,7 @@ ngx_http_upstream_send_response(ngx_http_request_t *r, ngx_http_upstream_t *u)
 
     if (!u->buffering) {
         //FCGI写死为
-        //1.因为FCGI是包式的传输。非流式，不能接一点，发一点。在ngx_http_fastcgi_handler里面设置为1了。
+        //1.因为FCGI是包式的传输。非流式，不能接一点，发一点。在 ngx_http_fastcgi_handler 里面设置为1了。
         //buffering指nginx 会先buffer后端FCGI发过来的数据，然后一次发送给客户端。
         //默认这个是打开的。也就是nginx会buf住upstream发送的数据。这样效率会更高。
 #if (NGX_HTTP_CACHE)
@@ -3103,15 +3106,16 @@ ngx_http_upstream_send_response(ngx_http_request_t *r, ngx_http_upstream_t *u)
 
 #endif
 
+    //下面进入event_pipe过程，pipe==水泵，beng···
     p = u->pipe;
 
-    p->output_filter = ngx_http_upstream_output_filter;
+    p->output_filter = ngx_http_upstream_output_filter; //设置filter，可以看到就是http的输出filter
     p->output_ctx = r;
     p->tag = u->output.tag;
-    p->bufs = u->conf->bufs;
+    p->bufs = u->conf->bufs;            //设置bufs，它就是upstream中设置的bufs.u == &flcf->upstream;
     p->busy_size = u->conf->busy_buffers_size;
-    p->upstream = u->peer.connection;
-    p->downstream = c;
+    p->upstream = u->peer.connection;   //赋值跟后端upstream的连接。
+    p->downstream = c;                  //赋值跟客户端的连接。
     p->pool = r->pool;
     p->log = c->log;
     p->limit_rate = u->conf->limit_rate;
@@ -3156,6 +3160,8 @@ ngx_http_upstream_send_response(ngx_http_request_t *r, ngx_http_upstream_t *u)
     }
 #endif
 
+    //下面申请一个缓冲链接节点，来存储刚才我们再读取fcgi的包，为了得到HTTP headers的时候不小心多读取到的数据。
+    //其实只要FCGI发给后端的包中，有一个包的前半部分是header,后一部分是body，就会有预读数据。
     p->preread_bufs = ngx_alloc_chain_link(r->pool);
     if (p->preread_bufs == NULL) {
         ngx_http_upstream_finalize_request(r, u, NGX_ERROR);
@@ -3224,9 +3230,13 @@ ngx_http_upstream_send_response(ngx_http_request_t *r, ngx_http_upstream_t *u)
         return;
     }
 
+    //立即调用该函数，并且重置读事件记录点，这样重启有io事件时会重新挂起。
+    //设置读事件结构，是用来处理超时，关闭连接等用的。
     u->read_event_handler = ngx_http_upstream_process_upstream;
-    r->write_event_handler = ngx_http_upstream_process_downstream;
 
+    //设置可写事件结构。这样就可以给客户端发送数据了。
+    r->write_event_handler = ngx_http_upstream_process_downstream;
+    //发动一下数据读取吧。以后有数据可读的时候也会调用这里的。
     ngx_http_upstream_process_upstream(r, u);
 }
 
@@ -3918,6 +3928,9 @@ ngx_http_upstream_process_upstream(ngx_http_request_t *r,
             return;
         }
         //请求没有超时，那么对后端，处理一下读事件。ngx_event_pipe开始处理
+        //ngx_event_pipe()函数进入事件处理的主函数
+        //第一个参数：ngx_event_pipe_t结构的指针，也就是u->pipe
+        //第¥个参数：ngx_event_pipe_t结构的指针，也就是u->pipe
         if (ngx_event_pipe(p, 0) == NGX_ABORT) {
             ngx_http_upstream_finalize_request(r, u, NGX_ERROR);
             return;
@@ -5683,6 +5696,7 @@ ngx_http_upstream_cache_etag(ngx_http_request_t *r,
 static char *
 ngx_http_upstream(ngx_conf_t *cf, ngx_command_t *cmd, void *dummy)
 {
+    //当碰到upstream{}指令的时候调用这里。
     char                          *rv;
     void                          *mconf;
     ngx_str_t                     *value;
@@ -5700,6 +5714,7 @@ ngx_http_upstream(ngx_conf_t *cf, ngx_command_t *cmd, void *dummy)
     u.no_resolve = 1;
     u.no_port = 1;
 
+    //下面将u代表的数据设置到umcf->upstreams里面去。然后返回对应的upstream{}结构数据指针
     uscf = ngx_http_upstream_add(cf, &u, NGX_HTTP_UPSTREAM_CREATE
                                          |NGX_HTTP_UPSTREAM_WEIGHT
                                          |NGX_HTTP_UPSTREAM_MAX_CONNS
@@ -5711,13 +5726,13 @@ ngx_http_upstream(ngx_conf_t *cf, ngx_command_t *cmd, void *dummy)
         return NGX_CONF_ERROR;
     }
 
-
+    //申请ngx_http_conf_ctx_t结构，经典的main/srv/local_conf指针结构
     ctx = ngx_pcalloc(cf->pool, sizeof(ngx_http_conf_ctx_t));
     if (ctx == NULL) {
         return NGX_CONF_ERROR;
     }
 
-    http_ctx = cf->ctx;
+    http_ctx = cf->ctx; //跟上层的HTTP公用main_conf，这里跟server{}指令一样的，共享main_conf
     ctx->main_conf = http_ctx->main_conf;
 
     /* the upstream{}'s srv_conf */
@@ -5726,10 +5741,10 @@ ngx_http_upstream(ngx_conf_t *cf, ngx_command_t *cmd, void *dummy)
     if (ctx->srv_conf == NULL) {
         return NGX_CONF_ERROR;
     }
+    //在ngx_http_upstream_module模块里面记录我的srv_conf。里面记录了我里面有哪几个server指令
+    ctx->srv_conf[ngx_http_upstream_module.ctx_index] = uscf;   //uscf里面记录了server列表信息。
 
-    ctx->srv_conf[ngx_http_upstream_module.ctx_index] = uscf;
-
-    uscf->srv_conf = ctx->srv_conf;
+    uscf->srv_conf = ctx->srv_conf; //这一条，记住我这个upstream所属的srv_conf数组。也就是所属的http{}块里面的srv_conf
 
 
     /* the upstream{}'s loc_conf */
@@ -5739,7 +5754,7 @@ ngx_http_upstream(ngx_conf_t *cf, ngx_command_t *cmd, void *dummy)
         return NGX_CONF_ERROR;
     }
 
-    for (m = 0; cf->cycle->modules[m]; m++) {
+    for (m = 0; cf->cycle->modules[m]; m++) {   //老规矩，初始化所有HTTP模块的srv,loc配置。调用每个模块的create回调
         if (cf->cycle->modules[m]->type != NGX_HTTP_MODULE) {
             continue;
         }
@@ -5775,7 +5790,7 @@ ngx_http_upstream(ngx_conf_t *cf, ngx_command_t *cmd, void *dummy)
     /* parse inside upstream{} */
 
     pcf = *cf;
-    cf->ctx = ctx;
+    cf->ctx = ctx;  //临时切换ctx，进入upstream{}块中进行解析。
     cf->cmd_type = NGX_HTTP_UPS_CONF;
 
     rv = ngx_conf_parse(cf, NULL);

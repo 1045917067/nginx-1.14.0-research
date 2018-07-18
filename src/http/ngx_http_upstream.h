@@ -71,7 +71,9 @@ typedef struct {
 
 typedef struct {
     ngx_hash_t                       headers_in_hash;
+    //ngx_http_upstream_headers_in里面的数据.
     ngx_array_t                      upstreams;
+    //数组，代表有多少个upstream{}块。server xx.xx.xx.xx:xx weight=2 max_fails=3;  信息的数组。
                                              /* ngx_http_upstream_srv_conf_t */
 } ngx_http_upstream_main_conf_t;
 

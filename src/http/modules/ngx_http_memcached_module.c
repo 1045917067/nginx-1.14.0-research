@@ -302,6 +302,9 @@ ngx_http_memcached_reinit_request(ngx_http_request_t *r)
 static ngx_int_t
 ngx_http_memcached_process_header(ngx_http_request_t *r)
 {
+    //这个函数的调用时机是: ngx_http_upstream_process_header函数调用ngx_unix_recv读取mecached的数据，
+    //然后会调用u->process_header，也就是这个函数，来解析mecached的格式的返回数据。
+    //函数处理了mecached返回的第一行: VALUE   \r\n,设置content_length_n，status。不过HTML还没有解析或者读取。
     u_char                         *p, *start;
     ngx_str_t                       line;
     ngx_uint_t                      flags;
@@ -311,9 +314,9 @@ ngx_http_memcached_process_header(ngx_http_request_t *r)
     ngx_http_memcached_loc_conf_t  *mlcf;
 
     u = r->upstream;
-
+    //下面是不是有点偷懒，如果没有得到LF换行，那么每次都会循环这个buffer，多不好呀。
     for (p = u->buffer.pos; p < u->buffer.last; p++) {
-        if (*p == LF) {
+        if (*p == LF) { //碰到了\n
             goto found;
         }
     }
@@ -321,7 +324,7 @@ ngx_http_memcached_process_header(ngx_http_request_t *r)
     return NGX_AGAIN;
 
 found:
-
+    //得到
     line.data = u->buffer.pos;
     line.len = p - u->buffer.pos;
 
@@ -329,7 +332,7 @@ found:
         goto no_valid;
     }
 
-    *p = '\0';
+    *p = '\0';  //从这个回车截断。
     line.len--;
 
     ngx_log_debug1(NGX_LOG_DEBUG_HTTP, r->connection->log, 0,
@@ -352,8 +355,8 @@ found:
 
             return NGX_HTTP_UPSTREAM_INVALID_HEADER;
         }
-
-        p += ctx->key.len;
+        //返回行是这样的: VALUE   \r\n
+        p += ctx->key.len;  //跳过key.去看flag
 
         if (*p++ != ' ') {
             goto no_valid;
@@ -363,7 +366,7 @@ found:
 
         start = p;
 
-        while (*p) {
+        while (*p) {    //nginx不处理flags。没用
             if (*p++ == ' ') {
                 if (mlcf->gzip_flag) {
                     goto flags;
@@ -421,6 +424,8 @@ found:
     }
 
     if (ngx_strcmp(p, "END\x0d") == 0) {
+        //结束了，那说明这一行没东西，因为nginx一次只发送一块数据。所以这里很简单。
+        //这里虽然是404但是，其实我们可以做的有意思的，比如针对404做redirect到实际的后端机器。这样就是缓存失效，自动回源了。
         ngx_log_error(NGX_LOG_INFO, r->connection->log, 0,
                       "key: \"%V\" was not found by memcached", &ctx->key);
 
@@ -462,7 +467,11 @@ ngx_http_memcached_filter_init(void *data)
     return NGX_OK;
 }
 
-
+//这个函数用来接收mecache的body数据，conf->upstream.buffering = 0，所以memcached模块不支持buffering.
+//这个函数的调用时机: ngx_http_upstream_process_non_buffered_upstream等调用ngx_unix_recv接收到upstream返回的数据后
+//就调用这里进行协议转换，不过目前转换不多。
+//注意这个函数调用的时候，u->buffer->last和pos并没有更新的，
+//也就是什么呢，刚刚读取的bytes个字节的数据，位于u->buffer->last之后。pos目前不准。
 static ngx_int_t
 ngx_http_memcached_filter(void *data, ssize_t bytes)
 {
@@ -474,9 +483,9 @@ ngx_http_memcached_filter(void *data, ssize_t bytes)
     ngx_http_upstream_t  *u;
 
     u = ctx->request->upstream;
-    b = &u->buffer;
+    b = &u->buffer; //得到接收的数据。
 
-    if (u->length == (ssize_t) ctx->rest) {
+    if (u->length == (ssize_t) ctx->rest) {//rest初始化为NGX_HTTP_MEMCACHED_END。rest表示还需要读取多少"END\r\n"类型的数据。
 
         if (ngx_strncmp(b->last,
                    ngx_http_memcached_end + NGX_HTTP_MEMCACHED_END - ctx->rest,
@@ -485,7 +494,7 @@ ngx_http_memcached_filter(void *data, ssize_t bytes)
         {
             ngx_log_error(NGX_LOG_ERR, ctx->request->connection->log, 0,
                           "memcached sent invalid trailer");
-
+            //搞到末尾了。所以下面其实应该不用减了，没了的。
             u->length = 0;
             ctx->rest = 0;
 
@@ -503,9 +512,9 @@ ngx_http_memcached_filter(void *data, ssize_t bytes)
     }
 
     for (cl = u->out_bufs, ll = &u->out_bufs; cl; cl = cl->next) {
-        ll = &cl->next;
+        ll = &cl->next; //找到要输出去的数据链表的最后部分。
     }
-
+    //申请一个链接节点。
     cl = ngx_chain_get_free_buf(ctx->request->pool, &u->free_bufs);
     if (cl == NULL) {
         return NGX_ERROR;
@@ -514,24 +523,24 @@ ngx_http_memcached_filter(void *data, ssize_t bytes)
     cl->buf->flush = 1;
     cl->buf->memory = 1;
 
-    *ll = cl;
+    *ll = cl;   //这个新的节点的数据挂载到out_bufs的最后面。
 
-    last = b->last;
-    cl->buf->pos = last;
-    b->last += bytes;
-    cl->buf->last = b->last;
+    last = b->last; //得到这块buf之前的尾部，可能有残留数据。
+    cl->buf->pos = last;    //等于尾部，因为这个之前的b->last是上一块数据的值。
+    b->last += bytes;       //调整尾部。
+    cl->buf->last = b->last;    //初始化要发送给客户端的这块的尾部，可能需要调，比如满了数据了。
     cl->buf->tag = u->output.tag;
 
     ngx_log_debug4(NGX_LOG_DEBUG_HTTP, ctx->request->connection->log, 0,
                    "memcached filter bytes:%z size:%z length:%O rest:%z",
                    bytes, b->last - b->pos, u->length, ctx->rest);
 
-    if (bytes <= (ssize_t) (u->length - NGX_HTTP_MEMCACHED_END)) {
+    if (bytes <= (ssize_t) (u->length - NGX_HTTP_MEMCACHED_END)) {  //读取的字节数还不是数据区的末尾。将这块数据纳入链表末尾，然后减少还剩下的数据量变量
         u->length -= bytes;
         return NGX_OK;
     }
-
-    last += (size_t) (u->length - NGX_HTTP_MEMCACHED_END);
+    //否则，头部都在这里了。
+    last += (size_t) (u->length - NGX_HTTP_MEMCACHED_END);  //直接移动到后面去。
 
     if (ngx_strncmp(last, ngx_http_memcached_end, b->last - last) != 0) {
         ngx_log_error(NGX_LOG_ERR, ctx->request->connection->log, 0,
@@ -545,10 +554,10 @@ ngx_http_memcached_filter(void *data, ssize_t bytes)
         return NGX_OK;
     }
 
-    ctx->rest -= b->last - last;
-    b->last = last;
+    ctx->rest -= b->last - last;    //后面还有这么多的"END\r\n"数据，所以直接rest记录还需要读取多少这样的无用数据。
+    b->last = last;                 //标记这块buf的结尾
     cl->buf->last = last;
-    u->length = ctx->rest;
+    u->length = ctx->rest;          //后面只需要处理尾部的结尾了。
 
     if (u->length == 0) {
         u->keepalive = 1;
