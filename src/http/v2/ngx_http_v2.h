@@ -387,6 +387,7 @@ Stream Identifier若为0x0，则表示针对整个连接，否则针对具体流
 #define NGX_HTTP_V2_ALPN_ADVERTISE       "\x02h2"
 #define NGX_HTTP_V2_NPN_ADVERTISE        NGX_HTTP_V2_ALPN_ADVERTISE
 
+// buff大小
 #define NGX_HTTP_V2_STATE_BUFFER_SIZE    16
 
 #define NGX_HTTP_V2_DEFAULT_FRAME_SIZE   (1 << 14)
@@ -403,7 +404,7 @@ Stream Identifier若为0x0，则表示针对整个连接，否则针对具体流
 // HTTP2头部长度9字节
 #define NGX_HTTP_V2_FRAME_HEADER_SIZE    9
 
-/* frame types */
+
 // frame types  HTTP2报文头部的type字段  针对时间敏感的帧，比如RST_STREAM, WINDOW_UPDATE, PRIORITY，需要快速发送出去
 #define NGX_HTTP_V2_DATA_FRAME           0x0
 #define NGX_HTTP_V2_HEADERS_FRAME        0x1

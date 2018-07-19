@@ -427,6 +427,10 @@ ngx_http_v2_read_handler(ngx_event_t *rev)
     do {
         p = h2mcf->recv_buffer;
 
+        /*
+         当读取的数据没有满足header中length指定的的长度时，下面两句才会有效，相当于把之前缓存的数据
+         放在当前buffer最前面。就是合并的意思。
+        */
         ngx_memcpy(p, h2c->state.buffer, NGX_HTTP_V2_STATE_BUFFER_SIZE);
         end = p + h2c->state.buffer_used;
 
@@ -456,6 +460,7 @@ ngx_http_v2_read_handler(ngx_event_t *rev)
         h2c->state.incomplete = 0;
 
         do {
+            // 不同的处理阶段，handler不同，初始化为 ngx_http_v2_state_preface
             p = h2c->state.handler(h2c, p, end);
 
             if (p == NULL) {
@@ -834,16 +839,19 @@ ngx_http_v2_state_head(ngx_http_v2_connection_t *h2c, u_char *pos, u_char *end)
     uint32_t    head;
     ngx_uint_t  type;
 
+    // frame的帧头必然是9个字节，Nginx处理逻辑是必须读完这9个字节才处理
     if (end - pos < NGX_HTTP_V2_FRAME_HEADER_SIZE) {
         return ngx_http_v2_state_save(h2c, pos, end, ngx_http_v2_state_head);
     }
 
-    // HTTP2头部解析
+    // HTTP2头部解析 取4字节
     head = ngx_http_v2_parse_uint32(pos);
 
+    // 4字节中高3字节是length、低1字节是type
     h2c->state.length = ngx_http_v2_parse_length(head);
     h2c->state.flags = pos[4];
 
+    // 9字节中后4字节是stream id
     h2c->state.sid = ngx_http_v2_parse_sid(&pos[5]);
 
     pos += NGX_HTTP_V2_FRAME_HEADER_SIZE;
@@ -860,7 +868,7 @@ ngx_http_v2_state_head(ngx_http_v2_connection_t *h2c, u_char *pos, u_char *end)
         return ngx_http_v2_state_skip(h2c, pos, end);
     }
 
-    // HTTP2帧内容部分解析
+    // 根据不同类型调用不同的处理函数
     return ngx_http_v2_frame_states[type](h2c, pos, end);
 }
 
