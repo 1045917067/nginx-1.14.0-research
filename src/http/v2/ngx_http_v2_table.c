@@ -140,6 +140,7 @@ ngx_http_v2_get_indexed_header(ngx_http_v2_connection_t *h2c, ngx_uint_t index,
         return NGX_OK;
     }
 
+    // 从动态表获取
     index -= NGX_HTTP_V2_STATIC_TABLE_ENTRIES;
 
     /*

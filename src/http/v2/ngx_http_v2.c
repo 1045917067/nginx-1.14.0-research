@@ -2154,8 +2154,12 @@ static u_char *
 ngx_http_v2_state_settings(ngx_http_v2_connection_t *h2c, u_char *pos,
     u_char *end)
 {
+    // client发送的settting是携带ack标志位的，说明握手完成了
     if (h2c->state.flags == NGX_HTTP_V2_ACK_FLAG) { // 头部flag为NGX_HTTP_V2_ACK_FLAG
-        // ACK (0x1)，表示接收者已经接收到SETTING帧，作为确认必须设置此标志位，此时负载为空，否则需要报FRAME_SIZE_ERROR错误
+        /*
+         ACK (0x1)，表示接收者已经接收到SETTING帧，作为确认必须设置此标志位，
+         此时负载为空，否则需要报FRAME_SIZE_ERROR错误
+        */
         if (h2c->state.length != 0) {
             ngx_log_error(NGX_LOG_INFO, h2c->connection->log, 0,
                           "client sent SETTINGS frame with the ACK flag "
@@ -2169,7 +2173,8 @@ ngx_http_v2_state_settings(ngx_http_v2_connection_t *h2c, u_char *pos,
         return ngx_http_v2_state_complete(h2c, pos, end);
     }
 
-    if (h2c->state.length % NGX_HTTP_V2_SETTINGS_PARAM_SIZE) { // setting帧内容部分必须为6字节的倍数
+    // setting帧内容部分必须为6字节的倍数
+    if (h2c->state.length % NGX_HTTP_V2_SETTINGS_PARAM_SIZE) {
         ngx_log_error(NGX_LOG_INFO, h2c->connection->log, 0,
                       "client sent SETTINGS frame with incorrect length %uz",
                       h2c->state.length);
