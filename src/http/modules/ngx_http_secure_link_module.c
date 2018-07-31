@@ -4,6 +4,19 @@
  * Copyright (C) Nginx, Inc.
  */
 
+/*
+location /sec/ {
+        root /soft/test;
+        secure_link $arg_st,$arg_e;
+        secure_link_md5 segredo$uri$arg_e; #segredo为密码样例
+        if ( $secure_link = "" ) {
+                return 402;
+        }
+        if ( $secure_link = "0" ) {
+                return 405;
+        }
+    }
+*/
 
 #include <ngx_config.h>
 #include <ngx_core.h>

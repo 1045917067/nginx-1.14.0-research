@@ -161,6 +161,7 @@ ngx_http_limit_conn_handler(ngx_http_request_t *r)
     limits = lccf->limits.elts;
 
     for (i = 0; i < lccf->limits.nelts; i++) {
+        //处理每一条limit_conn策略
         ctx = limits[i].shm_zone->data;
 
         if (ngx_http_complex_value(r, &ctx->key, &key) != NGX_OK) {
@@ -186,9 +187,9 @@ ngx_http_limit_conn_handler(ngx_http_request_t *r)
         shpool = (ngx_slab_pool_t *) limits[i].shm_zone->shm.addr;
 
         ngx_shmtx_lock(&shpool->mutex);
-
+        //根据KEY在RBTREE中查找节点
         node = ngx_http_limit_conn_lookup(ctx->rbtree, &key, hash);
-
+        //若没有找到节点，说明该请求是这个KEY的第一个请求
         if (node == NULL) {
 
             n = offsetof(ngx_rbtree_node_t, color)
@@ -209,7 +210,7 @@ ngx_http_limit_conn_handler(ngx_http_request_t *r)
             lc->len = (u_char) key.len;
             lc->conn = 1;
             ngx_memcpy(lc->data, key.data, key.len);
-
+            //将连接数初始化为1，添加到RBTREE中
             ngx_rbtree_insert(ctx->rbtree, node);
 
         } else {
@@ -241,7 +242,7 @@ ngx_http_limit_conn_handler(ngx_http_request_t *r)
         if (cln == NULL) {
             return NGX_HTTP_INTERNAL_SERVER_ERROR;
         }
-
+        //请求处理完成后滴啊用cleanup函数
         cln->handler = ngx_http_limit_conn_cleanup;
         lccln = cln->data;
 

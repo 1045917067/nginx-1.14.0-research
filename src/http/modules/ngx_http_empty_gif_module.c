@@ -9,6 +9,21 @@
 #include <ngx_http.h>
 
 
+/*
+注册方式：
+auto/modules中注册，
+编译后在ngx_modules.c中
+ngx_module_t *ngx_modules[] = {
+    &ngx_core_module,
+    &ngx_errlog_module,
+    &ngx_conf_module,
+    ...
+    &ngx_http_empty_gif_module,
+    ...
+    NULL
+};
+注册进ngx_modules表中
+*/
 static char *ngx_http_empty_gif(ngx_conf_t *cf, ngx_command_t *cmd,
     void *conf);
 

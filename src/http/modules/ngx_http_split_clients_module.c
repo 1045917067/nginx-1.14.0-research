@@ -3,8 +3,24 @@
  * Copyright (C) Igor Sysoev
  * Copyright (C) Nginx, Inc.
  */
+/*
+https://cloud.tencent.com/developer/chapter/14727
+*/
 
 
+/*
+适用于A/B测试
+http {
+    split_clients "${remote_addr}AAA" $variant {
+                   0.5%               .one;
+                   2.0%               .two;
+                   *                  "";
+    }
+
+    server {
+        location / {
+            index index${variant}.html;
+*/
 #include <ngx_config.h>
 #include <ngx_core.h>
 #include <ngx_http.h>
