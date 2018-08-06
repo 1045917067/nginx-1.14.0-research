@@ -48,6 +48,7 @@ extern ngx_module_t  ngx_http_ssi_filter_module;            /* 支持过滤SSI�
 extern ngx_module_t  ngx_http_charset_filter_module;        /* 支持添加charset，也支持将内容从一种字符集转换到另外一种字符集 */
 extern ngx_module_t  ngx_http_userid_filter_module;         /* 支持添加统计用的识别用户的cookie */
 extern ngx_module_t  ngx_http_headers_filter_module;        /* 支持设置expire和Cache-control头，支持添加任意名称的头 */
+
 extern ngx_module_t  ngx_http_copy_filter_module;           /* 根据需求重新复制输出链表中的某些节点（比如将in_file的节点从文件读出并复制到新的节点），并交给后续filter进行处理 */
 extern ngx_module_t  ngx_http_range_body_filter_module;     /* body filter，支持range功能，如果请求包含range请求，那就只发送range请求的一段内容 */
 extern ngx_module_t  ngx_http_not_modified_filter_module;   /* 如果请求的if-modified-since等于回复的last-modified值，说明回复没有变化，清空所有回复的内容，返回304 */
