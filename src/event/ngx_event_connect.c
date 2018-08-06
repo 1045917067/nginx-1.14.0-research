@@ -31,6 +31,7 @@ ngx_event_connect_peer(ngx_peer_connection_t *pc)
     ngx_event_t       *rev, *wev;
     ngx_connection_t  *c;
 
+    //peer.get获取负载策略的ip地址
     rc = pc->get(pc, pc->data);
     if (rc != NGX_OK) {
         return rc;

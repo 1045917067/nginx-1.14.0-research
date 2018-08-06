@@ -63,11 +63,11 @@ struct ngx_event_pipe_s {
     unsigned           cacheable:1;
     unsigned           single_buf:1;    //如果使用了NGX_USE_AIO_EVENT异步IO标志，则设置为1
     unsigned           free_bufs:1;
-    unsigned           upstream_done:1;
+    unsigned           upstream_done:1; //表示Nginx与上游交互已经结束unsigned
     unsigned           upstream_error:1;
-    unsigned           upstream_eof:1;
+    unsigned           upstream_eof:1;      //表示与上游服务器的连接已关闭unsigned
     unsigned           upstream_blocked:1;  //ngx_event_pipe用来标记是否读取了upstream的数据来决定是不是要write
-    unsigned           downstream_done:1;
+    unsigned           downstream_done:1;   //与下游的交互已结束unsigned
     unsigned           downstream_error:1;
     unsigned           cyclic_temp_file:1;
     unsigned           aio:1;

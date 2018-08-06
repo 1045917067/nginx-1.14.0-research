@@ -9,6 +9,8 @@
 #include <ngx_core.h>
 #include <ngx_http.h>
 
+/*在没有Content-Length头的情况下,chunk filter模块可以流式(stream)的加上长度.
+注意这个前提条件,没有设置Content-Length头*/
 
 typedef struct {
     ngx_chain_t         *free;
@@ -127,7 +129,7 @@ ngx_http_chunked_body_filter(ngx_http_request_t *r, ngx_chain_t *in)
         ngx_log_debug1(NGX_LOG_DEBUG_HTTP, r->connection->log, 0,
                        "http chunk: %O", ngx_buf_size(cl->buf));
 
-        size += ngx_buf_size(cl->buf);
+        size += ngx_buf_size(cl->buf);  //循环统计出总的size大小
 
         if (cl->buf->flush
             || cl->buf->sync
@@ -138,7 +140,7 @@ ngx_http_chunked_body_filter(ngx_http_request_t *r, ngx_chain_t *in)
             if (tl == NULL) {
                 return NGX_ERROR;
             }
-
+            //这样会形成一条新的链,链首为out
             tl->buf = cl->buf;
             *ll = tl;
             ll = &tl->next;
@@ -151,6 +153,8 @@ ngx_http_chunked_body_filter(ngx_http_request_t *r, ngx_chain_t *in)
         cl = cl->next;
     }
 
+    /*每个分块包含一个长度值和该分块的数据.长度值是十六进制形式并以CRLF与数据分隔开.
+    分块中数据的大小以字节计数,不包括长度值与数据之间的CRLF序列以及分块结尾的CRLF序列*/
     if (size) {
         tl = ngx_chain_get_free_buf(r->pool, &ctx->free);
         if (tl == NULL) {
@@ -160,6 +164,8 @@ ngx_http_chunked_body_filter(ngx_http_request_t *r, ngx_chain_t *in)
         b = tl->buf;
         chunk = b->start;
 
+        /*多次调用output_body_filter,chunk可能在之前已分配?
+        但是,如果tl是新分配的chunk怎么可能不是NULL呢?*/
         if (chunk == NULL) {
             /* the "0000000000000000" is 64-bit hexadecimal string */
 
@@ -169,6 +175,7 @@ ngx_http_chunked_body_filter(ngx_http_request_t *r, ngx_chain_t *in)
             }
 
             b->start = chunk;
+            //有必要分配这么大吗,size有这么大吗?
             b->end = chunk + sizeof("0000000000000000" CRLF) - 1;
         }
 
@@ -176,9 +183,11 @@ ngx_http_chunked_body_filter(ngx_http_request_t *r, ngx_chain_t *in)
         b->memory = 0;
         b->temporary = 1;
         b->pos = chunk;
-        b->last = ngx_sprintf(chunk, "%xO" CRLF, size);
+        //通过upstream中设置块之间存在%x0间隔
+        //无符号十六进制整数，在指定填充 padding 的数字左边放置零（0）
+        b->last = ngx_sprintf(chunk, "%xO" CRLF, size); //十六进制小写
 
-        tl->next = out;
+        tl->next = out; //这个才是重点,out是内容
         out = tl;
     }
 
@@ -202,6 +211,7 @@ ngx_http_chunked_body_filter(ngx_http_request_t *r, ngx_chain_t *in)
             return NGX_ERROR;
         }
 
+        //中间块
         b = tl->buf;
 
         b->tag = (ngx_buf_tag_t) &ngx_http_chunked_filter_module;

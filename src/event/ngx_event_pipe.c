@@ -20,7 +20,7 @@ static ngx_int_t ngx_event_pipe_drain_chains(ngx_event_pipe_t *p);
 
 
 //ngx_event_pipe函数主体就是一个循环，循环读取upstream的数据，然后发送到客户端去。
-//分别调用ngx_event_pipe_read_upstream和ngx_event_pipe_write_to_downstream，从函数名就可以看出来
+//分别调用 ngx_event_pipe_read_upstream 和 ngx_event_pipe_write_to_downstream ，从函数名就可以看出来
 ngx_int_t
 ngx_event_pipe(ngx_event_pipe_t *p, ngx_int_t do_write)
 {

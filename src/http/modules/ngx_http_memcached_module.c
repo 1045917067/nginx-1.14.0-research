@@ -226,7 +226,7 @@ ngx_http_memcached_handler(ngx_http_request_t *r)
     return NGX_DONE;
 }
 
-
+//很简单的按照设置的内容生成一个 key，接着生成一个“get $key”的请求，放在 r->upstream->request_bufs 里面。
 static ngx_int_t
 ngx_http_memcached_create_request(ngx_http_request_t *r)
 {
@@ -292,13 +292,20 @@ ngx_http_memcached_create_request(ngx_http_request_t *r)
 }
 
 
+//无需初始化。
 static ngx_int_t
 ngx_http_memcached_reinit_request(ngx_http_request_t *r)
 {
     return NGX_OK;
 }
 
+//模块的业务重点函数。memcache 协议的头部信息被定义为第一行文本，可以找到这段代码证明：
+//如果在已读入缓冲的数据中没有发现 LF('\n')字符，函数返回 NGX_AGAIN，表示头部未完全读入，需要继续读取数据。Nginx 在收到新的数据以后会再次调用该函数。
+//Nginx 处理后端服务器的响应头时只会使用一块缓存，所有数据都在这块缓存中，所以解析头部信息时不需要考虑头部信息跨越多块缓存的情况。而如果头部过大，不能保存在这块缓存中，Nginx 会返回错误信息给客户端，并记录 error log，提示缓存不够大。
+//process_header 的重要职责是将后端服务器返回的状态翻译成返回给客户端的状态。例如，在 ngx_http_memcached_process_header 中，有这样几段代码：
 
+
+//process_header 函数完成响应头的正确处理，应该返回 NGX_OK。如果返回 NGX_AGAIN，表示未读取完整数据，需要从后端服务器继续读取数据。返回 NGX_DECLINED 无意义，其他任何返回值都被认为是出错状态，Nginx 将结束 upstream 请求并返回错误信息。
 static ngx_int_t
 ngx_http_memcached_process_header(ngx_http_request_t *r)
 {
@@ -314,7 +321,6 @@ ngx_http_memcached_process_header(ngx_http_request_t *r)
     ngx_http_memcached_loc_conf_t  *mlcf;
 
     u = r->upstream;
-    //下面是不是有点偷懒，如果没有得到LF换行，那么每次都会循环这个buffer，多不好呀。
     for (p = u->buffer.pos; p < u->buffer.last; p++) {
         if (*p == LF) { //碰到了\n
             goto found;
@@ -446,7 +452,7 @@ no_valid:
     return NGX_HTTP_UPSTREAM_INVALID_HEADER;
 }
 
-
+//修正从后端服务器收到的内容长度。因为在处理 header 时没有加上这部分长度。
 static ngx_int_t
 ngx_http_memcached_filter_init(void *data)
 {
@@ -566,7 +572,7 @@ ngx_http_memcached_filter(void *data, ssize_t bytes)
     return NGX_OK;
 }
 
-
+//无需额外操作。
 static void
 ngx_http_memcached_abort_request(ngx_http_request_t *r)
 {
@@ -575,7 +581,7 @@ ngx_http_memcached_abort_request(ngx_http_request_t *r)
     return;
 }
 
-
+//无需额外操作。
 static void
 ngx_http_memcached_finalize_request(ngx_http_request_t *r, ngx_int_t rc)
 {
