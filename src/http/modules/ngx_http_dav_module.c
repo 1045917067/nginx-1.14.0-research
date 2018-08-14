@@ -139,6 +139,9 @@ ngx_module_t  ngx_http_dav_module = {
 };
 
 
+/*
+每次http请求来了做的操作
+*/
 static ngx_int_t
 ngx_http_dav_handler(ngx_http_request_t *r)
 {
@@ -150,28 +153,28 @@ ngx_http_dav_handler(ngx_http_request_t *r)
     if (!(r->method & dlcf->methods)) {
         return NGX_DECLINED;
     }
-
+    // 根据HTTP请求不同进行判断
     switch (r->method) {
 
     case NGX_HTTP_PUT:
-
+        // 不能更新目录
         if (r->uri.data[r->uri.len - 1] == '/') {
             ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
                           "cannot PUT to a collection");
             return NGX_HTTP_CONFLICT;
         }
-
+        // 如果想要指定更新文件中的某些区域，这个是不支持的。
         if (r->headers_in.content_range) {
             ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
                           "PUT with range is unsupported");
             return NGX_HTTP_NOT_IMPLEMENTED;
         }
 
-        r->request_body_in_file_only = 1;
-        r->request_body_in_persistent_file = 1;
-        r->request_body_in_clean_file = 1;
-        r->request_body_file_group_access = 1;
-        r->request_body_file_log_level = 0;
+        r->request_body_in_file_only = 1; // 这个在save filter的时候表示存储数据到文件中
+        r->request_body_in_persistent_file = 1;  // 设置这个之后代表上传的body保存的临时文件会持久化，后续用这个临时文件复制等。
+        r->request_body_in_clean_file = 1; // 创建的临时文件在不用之后是否清除，1表示不用之后就删除，而不只是关闭
+        r->request_body_file_group_access = 1; // 文件权限设置为0660
+        r->request_body_file_log_level = 0; // 临时文件的log级别
 
         rc = ngx_http_read_client_request_body(r, ngx_http_dav_put_handler);
 
@@ -201,7 +204,9 @@ ngx_http_dav_handler(ngx_http_request_t *r)
     return NGX_DECLINED;
 }
 
-
+/*
+读取完body并且保存之后，执行的命令
+*/
 static void
 ngx_http_dav_put_handler(ngx_http_request_t *r)
 {
@@ -227,6 +232,7 @@ ngx_http_dav_put_handler(ngx_http_request_t *r)
         return;
     }
 
+    // 先将uri，根据location设置的root，alias对应到服务器路径
     if (ngx_http_map_uri_to_path(r, &path, &root, 0) == NULL) {
         ngx_http_finalize_request(r, NGX_HTTP_INTERNAL_SERVER_ERROR);
         return;
@@ -238,11 +244,12 @@ ngx_http_dav_put_handler(ngx_http_request_t *r)
                    "http put filename: \"%s\"", path.data);
 
     temp = &r->request_body->temp_file->file.name;
-
+    // 如果要创建的path没有文件，就创建
     if (ngx_file_info(path.data, &fi) == NGX_FILE_ERROR) {
         status = NGX_HTTP_CREATED;
 
     } else {
+        // 否则的话，就重写这个文件
         status = NGX_HTTP_NO_CONTENT;
 
         if (ngx_is_dir(&fi)) {
@@ -278,13 +285,15 @@ ngx_http_dav_put_handler(ngx_http_request_t *r)
             ext.fd = r->request_body->temp_file->file.fd;
         }
     }
-
+    // 将tmp文件rename到path路径文件，并且根据ext进行设置权限
     if (ngx_ext_rename_file(temp, &path, &ext) != NGX_OK) {
         ngx_http_finalize_request(r, NGX_HTTP_INTERNAL_SERVER_ERROR);
         return;
     }
 
+    // 如果是新创建一个文件
     if (status == NGX_HTTP_CREATED) {
+        // 并且设置response的 Location header
         if (ngx_http_dav_location(r, path.data) != NGX_OK) {
             ngx_http_finalize_request(r, NGX_HTTP_INTERNAL_SERVER_ERROR);
             return;
@@ -353,7 +362,7 @@ ok:
         return ngx_http_dav_error(r->connection->log, err,
                                   rc, ngx_link_info_n, path.data);
     }
-
+    // 如果要删除的是一个目录的话
     if (ngx_is_dir(&fi)) {
 
         if (r->uri.data[r->uri.len - 1] != '/') {
@@ -1070,6 +1079,9 @@ ngx_http_dav_error(ngx_log_t *log, ngx_err_t err, ngx_int_t not_found,
 }
 
 
+/*
+在http header头里面设置Location头信息
+*/
 static ngx_int_t
 ngx_http_dav_location(ngx_http_request_t *r, u_char *path)
 {
@@ -1096,6 +1108,7 @@ ngx_http_dav_location(ngx_http_request_t *r, u_char *path)
         ngx_memcpy(location, r->uri.data, r->uri.len);
     }
 
+    // 设置Location的信息
     r->headers_out.location->hash = 1;
     ngx_str_set(&r->headers_out.location->key, "Location");
     r->headers_out.location->value.len = r->uri.len;

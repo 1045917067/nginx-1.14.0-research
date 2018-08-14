@@ -137,6 +137,13 @@ ngx_write_chain_to_temp_file(ngx_temp_file_t *tf, ngx_chain_t *chain)
 }
 
 
+//创建一个临时文件
+//参数: persistent表示这个临时文件使用完成之后是否删除， access表示文件权限
+//	clean 表示文件不再使用时，1:删除文件，0:关闭文件
+//	file 记录了文件名信息
+//	path 记录了文件的目录信息
+// persistent:
+//例如: 拼装/home/nginx/tmpfile/9/32/178/00004178329这种格式文件名后，然后创建文件
 ngx_int_t
 ngx_create_temp_file(ngx_file_t *file, ngx_path_t *path, ngx_pool_t *pool,
     ngx_uint_t persistent, ngx_uint_t clean, ngx_uint_t access)
@@ -205,7 +212,7 @@ ngx_create_temp_file(ngx_file_t *file, ngx_path_t *path, ngx_pool_t *pool,
                        "temp fd:%d", file->fd);
 
         if (file->fd != NGX_INVALID_FILE) {
-
+            // clean使用在这里，如果文件不使用的时候，设置1，嗲用delete_file删除文件，调用cleanup，关闭文件
             cln->handler = clean ? ngx_pool_delete_file : ngx_pool_cleanup_file;
             clnf = cln->data;
 
@@ -655,7 +662,9 @@ ngx_create_paths(ngx_cycle_t *cycle, ngx_uid_t user)
     return NGX_OK;
 }
 
-
+/*
+将src文件rename到to目录文件，根据ext进行设置文件属性。
+*/
 ngx_int_t
 ngx_ext_rename_file(ngx_str_t *src, ngx_str_t *to, ngx_ext_rename_file_t *ext)
 {
@@ -684,7 +693,7 @@ ngx_ext_rename_file(ngx_str_t *src, ngx_str_t *to, ngx_ext_rename_file_t *ext)
             goto failed;
         }
     }
-
+    // 真正的rename实际操作，调用的就是基本的rename函数
     if (ngx_rename_file(src->data, to->data) != NGX_FILE_ERROR) {
         return NGX_OK;
     }

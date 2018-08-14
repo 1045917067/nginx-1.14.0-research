@@ -2039,7 +2039,13 @@ ngx_http_output_filter(ngx_http_request_t *r, ngx_chain_t *in)
     return rc;
 }
 
-
+/*
+把请求uri对应到服务器上的路径
+r: 请求
+path: 对应的服务器上的路径
+root_lengths: location中设置的root的长度
+reserved: 自己填充保留的长度
+*/
 u_char *
 ngx_http_map_uri_to_path(ngx_http_request_t *r, ngx_str_t *path,
     size_t *root_length, size_t reserved)

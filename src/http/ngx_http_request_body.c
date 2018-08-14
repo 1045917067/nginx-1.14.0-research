@@ -25,7 +25,9 @@ static ngx_int_t ngx_http_request_body_length_filter(ngx_http_request_t *r,
 static ngx_int_t ngx_http_request_body_chunked_filter(ngx_http_request_t *r,
     ngx_chain_t *in);
 
-
+/*
+读取文件body，之后执行post_handler
+*/
 ngx_int_t
 ngx_http_read_client_request_body(ngx_http_request_t *r,
     ngx_http_client_body_handler_pt post_handler)
@@ -424,7 +426,9 @@ ngx_http_do_read_client_request_body(ngx_http_request_t *r)
     return NGX_OK;
 }
 
-
+/*
+将请求体写入到一个临时文件中去，如果request_body中设置了临时文件路径（有可能有模块会设置），就存到这个路径，如果没有的话，就保存到默认的文件路径
+*/
 static ngx_int_t
 ngx_http_write_request_body(ngx_http_request_t *r)
 {
@@ -479,7 +483,7 @@ ngx_http_write_request_body(ngx_http_request_t *r)
     if (rb->bufs == NULL) {
         return NGX_OK;
     }
-
+    // 把body的内容写到临时文件里面去
     n = ngx_write_chain_to_temp_file(rb->temp_file, rb->bufs);
 
     /* TODO: n == 0 or not complete and level event */

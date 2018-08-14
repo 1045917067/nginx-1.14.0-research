@@ -83,7 +83,9 @@ typedef struct {
     unsigned                   thread_write:1;
 } ngx_temp_file_t;
 
-
+/*
+这是一个rename文件的时候设置权限的结构
+*/
 typedef struct {
     ngx_uint_t                 access;
     ngx_uint_t                 path_access;

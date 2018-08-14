@@ -272,7 +272,12 @@ ngx_write_file(ngx_file_t *file, u_char *buf, size_t size, off_t offset)
 #endif
 }
 
-
+/*
+打开一个临时文件，并且设置它的属性以及用户的权限等各种参数。
+name: 临时文件名称
+persistent: 是否持久化这个临时文件，如果0，代表使用完这个文件之后就删除，如果1，代表使用完成这个文件后不删除
+access: 设置这个文件的权限
+*/
 ngx_fd_t
 ngx_open_tempfile(u_char *name, ngx_uint_t persistent, ngx_uint_t access)
 {
@@ -282,6 +287,7 @@ ngx_open_tempfile(u_char *name, ngx_uint_t persistent, ngx_uint_t access)
               access ? access : 0600);
 
     if (fd != -1 && !persistent) {
+        // 如果这个名称是文件的最后一个链接，并且没有其他进程将文件打开，那么对应的文件会被删除
         (void) unlink((const char *) name);
     }
 
