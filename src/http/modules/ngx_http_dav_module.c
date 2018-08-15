@@ -269,10 +269,10 @@ ngx_http_dav_put_handler(ngx_http_request_t *r)
 
     dlcf = ngx_http_get_module_loc_conf(r, ngx_http_dav_module);
 
-    ext.access = dlcf->access;
+    ext.access = dlcf->access; //文件的权限和目录的权限
     ext.path_access = dlcf->access;
     ext.time = -1;
-    ext.create_path = dlcf->create_full_put_path;
+    ext.create_path = dlcf->create_full_put_path; // 如果目录不存在，是否创建目录，on为要创建目录
     ext.delete_file = 1;
     ext.log = r->connection->log;
 
@@ -328,7 +328,7 @@ ngx_http_dav_delete_handler(ngx_http_request_t *r)
     }
 
     dlcf = ngx_http_get_module_loc_conf(r, ngx_http_dav_module);
-
+    // 要求你要删除的目录或者文件至少要有的深度
     if (dlcf->min_delete_depth) {
         d = 0;
 

@@ -963,7 +963,7 @@ ngx_walk_tree(ngx_tree_ctx_t *ctx, ngx_str_t *tree)
 
     ngx_log_debug1(NGX_LOG_DEBUG_CORE, ctx->log, 0,
                    "walk tree \"%V\"", tree);
-
+    // 打开文件路径
     if (ngx_open_dir(tree, &dir) == NGX_ERROR) {
         ngx_log_error(NGX_LOG_CRIT, ctx->log, ngx_errno,
                       ngx_open_dir_n " \"%s\" failed", tree->data);
@@ -991,7 +991,7 @@ ngx_walk_tree(ngx_tree_ctx_t *ctx, ngx_str_t *tree)
     for ( ;; ) {
 
         ngx_set_errno(0);
-
+        // 读取下个目录的进入点
         if (ngx_read_dir(&dir) == NGX_ERROR) {
             err = ngx_errno;
 
@@ -1012,7 +1012,7 @@ ngx_walk_tree(ngx_tree_ctx_t *ctx, ngx_str_t *tree)
 
         ngx_log_debug2(NGX_LOG_DEBUG_CORE, ctx->log, 0,
                       "tree name %uz:\"%s\"", len, name);
-
+        // 去掉.和..
         if (len == 1 && name[0] == '.') {
             continue;
         }
@@ -1087,7 +1087,7 @@ ngx_walk_tree(ngx_tree_ctx_t *ctx, ngx_str_t *tree)
                                "tree skip dir \"%s\"", file.data);
                 continue;
             }
-
+            // 对每个目录都执行下面的操作
             if (ngx_walk_tree(ctx, &file) == NGX_ABORT) {
                 goto failed;
             }
